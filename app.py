@@ -1,33 +1,38 @@
 import streamlit as st
 import websocket
-import json
 import threading
 import google.generativeai as genai
 
-# Конфигурация
-st.set_page_config(page_title="Bzzoiro Live AI", layout="wide")
-genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+st.set_page_config(layout="wide")
+
+# Конфигурация на Gemini
+try:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+    model = genai.GenerativeModel('gemini-pro')
+except:
+    st.error("Грешка при Gemini API ключа!")
 
 st.title("⚽ Bzzoiro AI Live Analytics")
 
-# Функция за анализ чрез Gemini
-def analyze_match(match_data):
-    model = genai.GenerativeModel('gemini-1.5-flash')
-    prompt = f"Анализирай този футболен мач на живо и дай кратък съвет за залог: {match_data}"
-    response = model.generate_content(prompt)
-    return response.text
+# Фонова нишка за WebSocket
+if 'ws_started' not in st.session_state:
+    st.session_state.live_data = "Свързвам се..."
+    st.session_state.ws_started = True
+    
+    def run_websocket():
+        def on_message(ws, message):
+            st.session_state.live_data = message
+        
+        ws = websocket.WebSocketApp("wss://sports.bzzoiro.com/ws/live/", on_message=on_message)
+        ws.run_forever()
 
-# Логика за WebSocket връзка (работи във фонов режим)
-if 'live_data' not in st.session_state:
-    st.session_state.live_data = "Чакам данни..."
+    threading.Thread(target=run_websocket, daemon=True).start()
 
-def on_message(ws, message):
-    st.session_state.live_data = message # Тук ще обработваме JSON данните
+st.write(f"Данни на живо: {st.session_state.live_data}")
 
-# Основен интерфейс
-st.write(f"Текущи данни от WebSocket: {st.session_state.live_data}")
-
-if st.button("Анализирай с Gemini"):
-    analysis = analyze_match(st.session_state.live_data)
-    st.write("### AI Съвет:")
-    st.info(analysis)
+if st.button("Анализирай"):
+    try:
+        response = model.generate_content(f"Анализирай тези данни за залог: {st.session_state.live_data}")
+        st.write(response.text)
+    except Exception as e:
+        st.write(f"Грешка: {e}")
