@@ -2,72 +2,52 @@ import streamlit as st
 import websocket
 import threading
 import json
-import time
-from google import genai 
+from google import genai
+from streamlit.runtime.scriptrunner import add_script_run_ctx
 
-# Настройка на страницата
 st.set_page_config(layout="wide", page_title="Bzzoiro Live AI")
 
-# Конфигурация на Gemini (използваме новата библиотека)
 try:
     client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
-    model_name = "gemini-3.1-flash-lite"
-except Exception as e:
-    st.error(f"Грешка при конфигурация на Gemini: {e}")
+except:
+    st.error("Грешка при Gemini ключа")
 
 st.title("⚽ Bzzoiro AI Live Analytics")
 
-# Инициализация на състоянието за данни
 if 'live_data' not in st.session_state:
-    st.session_state.live_data = "Очаквам старт..."
+    st.session_state.live_data = "Свързвам се..."
 
-# Логика за WebSocket
 def run_websocket():
     url = "wss://sports.bzzoiro.com/ws/live/"
     
     def on_message(ws, message):
+        # Това обновява състоянието и казва на Streamlit да се опресни
         st.session_state.live_data = message
+        # Понякога е нужно леко закъснение, за да се види ефекта
         
     def on_open(ws):
-        # Авторизация чрез изпращане на JSON съобщение, както изисква документацията
-        auth_payload = {
-            "action": "auth",
-            "api_key": st.secrets["BZZOIRO_API_KEY"]
-        }
+        auth_payload = {"action": "auth", "api_key": st.secrets["BZZOIRO_API_KEY"]}
         ws.send(json.dumps(auth_payload))
-        st.session_state.live_data = "Авторизация изпратена, очакване на поток..."
-        
-    def on_error(ws, error):
-        st.session_state.live_data = f"WebSocket грешка: {error}"
+        st.session_state.live_data = "Авторизация изпратена..."
 
-    ws = websocket.WebSocketApp(
-        url, 
-        on_message=on_message,
-        on_open=on_open,
-        on_error=on_error
-    )
+    ws = websocket.WebSocketApp(url, on_message=on_message, on_open=on_open)
     ws.run_forever()
 
-# Стартиране на WebSocket в отделна нишка
 if 'ws_started' not in st.session_state:
-    threading.Thread(target=run_websocket, daemon=True).start()
+    t = threading.Thread(target=run_websocket, daemon=True)
+    add_script_run_ctx(t) # ТОВА Е ТАЙНАТА: Свързва нишката със сайта
+    t.start()
     st.session_state.ws_started = True
 
-# Интерфейс
-st.write(f"**Статус на данни:** {st.session_state.live_data}")
+st.write(f"### Статус: {st.session_state.live_data}")
 
-if st.button("Анализирай с Gemini"):
+if st.button("Анализирай мача"):
     try:
-        # Извикване на модела за анализ
         response = client.models.generate_content(
-            model=model_name,
-            contents=f"Ти си футболен анализатор. Дай кратък, професионален съвет за тези данни на живо: {st.session_state.live_data}"
+            model="gemini-3.1-flash-lite",
+            contents=f"Ти си футболен анализатор. Дай съвет за тези данни: {st.session_state.live_data}"
         )
         st.write("### AI Анализ:")
         st.write(response.text)
     except Exception as e:
-        st.error(f"Грешка при анализа: {e}")
-
-# Бутон за ръчно обновяване на страницата (ако данните замръзнат)
-if st.button("Обнови страницата"):
-    st.rerun()
+        st.error(f"Грешка: {e}")
