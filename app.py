@@ -1,19 +1,33 @@
 import streamlit as st
-import pandas as pd
+import websocket
+import json
+import threading
+import google.generativeai as genai
 
-st.set_page_config(layout="wide", page_title="Bzzoiro Live Football")
-st.title("⚽ Bzzoiro Live Football Dashboard")
+# Конфигурация
+st.set_page_config(page_title="Bzzoiro Live AI", layout="wide")
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# Функция за визуализация на мач с чат прозорец
-def render_match(match_name, stats, live_score):
-    with st.expander(f"🔴 {match_name} - {live_score}"):
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            st.write("Статистики:", stats)
-        with col2:
-            st.text_area("AI Анализатор (Гемини)", "Анализирам мача в реално време...", height=100)
-            st.button(f"Попитай за {match_name}")
+st.title("⚽ Bzzoiro AI Live Analytics")
 
-# Примерни данни (скоро ще ги заменим с реални от Bzzoiro)
-st.subheader("Мачове на живо")
-render_match("Реал Мадрид - Барселона", "Притежание: 55% - 45%", "1:0")
+# Функция за анализ чрез Gemini
+def analyze_match(match_data):
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    prompt = f"Анализирай този футболен мач на живо и дай кратък съвет за залог: {match_data}"
+    response = model.generate_content(prompt)
+    return response.text
+
+# Логика за WebSocket връзка (работи във фонов режим)
+if 'live_data' not in st.session_state:
+    st.session_state.live_data = "Чакам данни..."
+
+def on_message(ws, message):
+    st.session_state.live_data = message # Тук ще обработваме JSON данните
+
+# Основен интерфейс
+st.write(f"Текущи данни от WebSocket: {st.session_state.live_data}")
+
+if st.button("Анализирай с Gemini"):
+    analysis = analyze_match(st.session_state.live_data)
+    st.write("### AI Съвет:")
+    st.info(analysis)
