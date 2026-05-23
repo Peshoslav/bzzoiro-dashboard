@@ -18,14 +18,21 @@ st.title("⚽ Bzzoiro AI Live Analytics")
 if 'live_data' not in st.session_state:
     st.session_state.live_data = "Свързвам се..."
 
+# Заменете блока с run_websocket с този:
 def run_websocket():
+    # Опитваме да добавим ключа към адреса, ако Header не работи
+    url = f"wss://sports.bzzoiro.com/ws/live/?api_key={st.secrets['BZZOIRO_API_KEY']}"
+    
     def on_message(ws, message):
         st.session_state.live_data = message
-    
+        
+    def on_open(ws):
+        st.session_state.live_data = "Успешна връзка! Чакам данни..."
+
     ws = websocket.WebSocketApp(
-        "wss://sports.bzzoiro.com/ws/live/", 
+        url, 
         on_message=on_message,
-        header={"Authorization": f"Bearer {st.secrets['BZZOIRO_API_KEY']}"}
+        on_open=on_open
     )
     ws.run_forever()
 
