@@ -1,30 +1,19 @@
 import streamlit as st
 import pandas as pd
-import requests
 
-# Настройка на страницата
-st.set_page_config(page_title="Bzzoiro Dashboard", layout="wide")
+st.set_page_config(layout="wide", page_title="Bzzoiro Live Football")
+st.title("⚽ Bzzoiro Live Football Dashboard")
 
-st.title("📊 Спортно табло в реално време")
+# Функция за визуализация на мач с чат прозорец
+def render_match(match_name, stats, live_score):
+    with st.expander(f"🔴 {match_name} - {live_score}"):
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            st.write("Статистики:", stats)
+        with col2:
+            st.text_area("AI Анализатор (Гемини)", "Анализирам мача в реално време...", height=100)
+            st.button(f"Попитай за {match_name}")
 
-# Извличане на API ключа от защитените настройки (Secrets)
-# Това ще работи, след като добавите ключа в Streamlit Cloud
-try:
-    api_key = st.secrets["BZZOIRO_API_KEY"]
-except:
-    st.warning("API ключът не е намерен в настройките (Secrets).")
-    api_key = None
-
-st.write("Добре дошли във вашето автоматизирано табло.")
-
-# Проверка дали API ключът е наличен
-if api_key:
-    st.success("API ключът е зареден успешно!")
-    # Тук по-късно ще добавим логиката за извличане на данни
-else:
-    st.info("Моля, добавете вашия BZZOIRO_API_KEY в секция Secrets на Streamlit Cloud.")
-
-# Място за бъдещата таблица с данни
-st.subheader("Спортни събития")
-if st.button("Тествай връзката"):
-    st.write("Предстои свързване към Bzzoiro API...")
+# Примерни данни (скоро ще ги заменим с реални от Bzzoiro)
+st.subheader("Мачове на живо")
+render_match("Реал Мадрид - Барселона", "Притежание: 55% - 45%", "1:0")
