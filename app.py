@@ -220,14 +220,50 @@ label, .stSelectbox label, .stSlider label { color: #9ca3af !important; font-siz
 # Helper renderers
 # ═════════════════════════════════════════════════════════════════
 
+def _team(val: Any) -> Dict:
+    """
+    Normalise ANY team field shape to {"id": ..., "name": ...}.
+
+    bzzoiro v2 can return:
+      • dict  {"id": 123, "name": "Arsenal", ...}  ← normal
+      • str   "Arsenal"                             ← compact form
+      • None / missing                              ← safety
+    """
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        return {"id": None, "name": val}
+    return {"id": None, "name": "?"}
+
+
+def _league_name(m: Dict) -> str:
+    for key in ("league", "tournament"):
+        val = m.get(key)
+        if isinstance(val, dict):
+            name = val.get("name", "")
+            if name:
+                return name
+        elif isinstance(val, str) and val:
+            return val
+    return ""
+
+
+def _score(m: Dict) -> tuple:
+    score_obj = m.get("score")
+    if isinstance(score_obj, dict):
+        return str(score_obj.get("home", "")), str(score_obj.get("away", ""))
+    h = m.get("home_score", "")
+    a = m.get("away_score", "")
+    return (str(h) if h is not None else ""), (str(a) if a is not None else "")
+
+
 def render_match_card(m: Dict, live: bool = False) -> None:
-    home = m.get("home_team", {}) or m.get("home", {})
-    away = m.get("away_team", {}) or m.get("away", {})
+    home = _team(m.get("home_team") or m.get("home"))
+    away = _team(m.get("away_team") or m.get("away"))
     home_name = home.get("name", "?")
     away_name = away.get("name", "?")
-    score_h = m.get("home_score", m.get("score", {}).get("home", ""))
-    score_a = m.get("away_score", m.get("score", {}).get("away", ""))
-    league  = m.get("league", {}).get("name", "") or m.get("tournament", {}).get("name", "")
+    score_h, score_a = _score(m)
+    league  = _league_name(m)
     kickoff = m.get("start_at", m.get("kickoff_at", m.get("event_date", "")))
     minute  = m.get("minute", "") or (m.get("time", {}) or {}).get("minute", "")
 
@@ -289,10 +325,11 @@ def render_team_form(fixtures: List[Dict], team_id: int) -> str:
     """Return last-5 W/D/L HTML badges for a team."""
     badges = []
     for m in fixtures[:5]:
-        home = (m.get("home_team") or m.get("home") or {}).get("id")
-        away = (m.get("away_team") or m.get("away") or {}).get("id")
-        sh = m.get("home_score", (m.get("score") or {}).get("home", 0)) or 0
-        sa = m.get("away_score", (m.get("score") or {}).get("away", 0)) or 0
+        home = _team(m.get("home_team") or m.get("home")).get("id")
+        away = _team(m.get("away_team") or m.get("away")).get("id")
+        score_h_str, score_a_str = _score(m)
+        sh = int(score_h_str) if score_h_str.isdigit() else 0
+        sa = int(score_a_str) if score_a_str.isdigit() else 0
         sh, sa = int(sh), int(sa)
         is_home = (home == team_id)
         if sh == sa:
@@ -318,8 +355,8 @@ def render_event_stats(event_id: int, home_name: str, away_name: str) -> None:
         st.info("Статистиките не са налични за този мач.")
         return
 
-    home_s = stats_data.get("home", stats_data.get("stats", {}).get("home", {}))
-    away_s = stats_data.get("away", stats_data.get("stats", {}).get("away", {}))
+    home_s = stats_data.get("home") or (stats_data.get("stats") or {}).get("home") or {}
+    away_s = stats_data.get("away") or (stats_data.get("stats") or {}).get("away") or {}
 
     col1, col2 = st.columns([1, 1])
     col1.markdown(f"**{home_name}**")
@@ -454,10 +491,10 @@ with tab_schedule:
         with right_col:
             sel_ev = st.session_state.get("selected_event")
             if sel_ev:
-                home = (sel_ev.get("home_team") or sel_ev.get("home") or {})
-                away = (sel_ev.get("away_team") or sel_ev.get("away") or {})
-                home_id  = home.get("id")
-                away_id  = away.get("id")
+                home = _team(sel_ev.get("home_team") or sel_ev.get("home"))
+                away = _team(sel_ev.get("away_team") or sel_ev.get("away"))
+                home_id   = home.get("id")
+                away_id   = away.get("id")
                 home_name = home.get("name", "Домакин")
                 away_name = away.get("name", "Гост")
                 event_id  = sel_ev.get("id")
@@ -479,8 +516,8 @@ with tab_schedule:
                         for fm in home_fixtures:
                             render_match_card(fm)
                             fid = fm.get("id")
-                            fhome = (fm.get("home_team") or fm.get("home") or {}).get("name","?")
-                            faway = (fm.get("away_team") or fm.get("away") or {}).get("name","?")
+                            fhome = _team(fm.get("home_team") or fm.get("home")).get("name","?")
+                            faway = _team(fm.get("away_team") or fm.get("away")).get("name","?")
                             with st.expander(f"Статистики: {fhome} – {faway}"):
                                 render_event_stats(fid, fhome, faway)
 
@@ -492,8 +529,8 @@ with tab_schedule:
                         for fm in away_fixtures:
                             render_match_card(fm)
                             fid = fm.get("id")
-                            fhome = (fm.get("home_team") or fm.get("home") or {}).get("name","?")
-                            faway = (fm.get("away_team") or fm.get("away") or {}).get("name","?")
+                            fhome = _team(fm.get("home_team") or fm.get("home")).get("name","?")
+                            faway = _team(fm.get("away_team") or fm.get("away")).get("name","?")
                             with st.expander(f"Статистики: {fhome} – {faway}"):
                                 render_event_stats(fid, fhome, faway)
 
@@ -506,9 +543,10 @@ with tab_schedule:
                             # Summary row
                             h_wins = d = a_wins = 0
                             for hm in h2h_matches:
-                                sh = int(hm.get("home_score", (hm.get("score") or {}).get("home", 0) or 0))
-                                sa = int(hm.get("away_score", (hm.get("score") or {}).get("away", 0) or 0))
-                                htid = (hm.get("home_team") or hm.get("home") or {}).get("id")
+                                _sh, _sa = _score(hm)
+                                sh = int(_sh) if _sh.isdigit() else 0
+                                sa = int(_sa) if _sa.isdigit() else 0
+                                htid = _team(hm.get("home_team") or hm.get("home")).get("id")
                                 if sh == sa:
                                     d += 1
                                 elif htid == home_id and sh > sa:
@@ -559,8 +597,8 @@ with tab_live:
 
         for lev in live_events:
             eid = lev.get("id")
-            home = (lev.get("home_team") or lev.get("home") or {})
-            away = (lev.get("away_team") or lev.get("away") or {})
+            home = _team(lev.get("home_team") or lev.get("home"))
+            away = _team(lev.get("away_team") or lev.get("away"))
             home_name = home.get("name", "Домакин")
             away_name = away.get("name", "Гост")
 
@@ -571,8 +609,10 @@ with tab_live:
             snap = ws_mgr.snapshots.get(eid, {})
 
             # ── Score header from WS snapshot or API fallback ──
-            score_h  = snap.get("score", {}).get("home", lev.get("home_score", "–"))
-            score_a  = snap.get("score", {}).get("away", lev.get("away_score", "–"))
+            _snap_score = snap.get("score") or {}
+            _lev_sh, _lev_sa = _score(lev)
+            score_h = _snap_score.get("home", _lev_sh or "–")
+            score_a = _snap_score.get("away", _lev_sa or "–")
             minute   = (snap.get("time") or {}).get("minute", "")
             status   = (snap.get("time") or {}).get("status", "")
             league   = (lev.get("league") or lev.get("tournament") or {}).get("name", "")
@@ -784,8 +824,8 @@ with tab_ai:
             if not ai_ev:
                 st.info("Избери мач от таб **Програма** или **На Живо** и натисни 🤖 AI.")
             else:
-                home = (ai_ev.get("home_team") or ai_ev.get("home") or {}).get("name", "?")
-                away = (ai_ev.get("away_team") or ai_ev.get("away") or {}).get("name", "?")
+                home = _team(ai_ev.get("home_team") or ai_ev.get("home")).get("name", "?")
+                away = _team(ai_ev.get("away_team") or ai_ev.get("away")).get("name", "?")
                 eid = ai_ev.get("id")
                 st.markdown(f"**Мач:** {home} – {away}  (ID {eid})")
 
@@ -804,8 +844,8 @@ with tab_ai:
                         odds  = get_event_odds(eid)
                         pred  = get_prediction(eid)
                         ws_snap = ws_mgr.snapshots.get(eid, {})
-                        home_id = (ai_ev.get("home_team") or ai_ev.get("home") or {}).get("id")
-                        away_id = (ai_ev.get("away_team") or ai_ev.get("away") or {}).get("id")
+                        home_id = _team(ai_ev.get("home_team") or ai_ev.get("home")).get("id")
+                        away_id = _team(ai_ev.get("away_team") or ai_ev.get("away")).get("id")
                         home_form = get_team_fixtures(home_id, 5) if home_id else []
                         away_form = get_team_fixtures(away_id, 5) if away_id else []
                         h2h = get_h2h(home_id, away_id, 5) if home_id and away_id else []
@@ -827,11 +867,11 @@ with tab_ai:
 
 ML ПРОГНОЗА: {json.dumps(pred, ensure_ascii=False)[:400]}
 
-ФОРМА {home} (последни 5): {[f"{(m.get('home_team') or m.get('home') or {}).get('name','')} {m.get('home_score','')}–{m.get('away_score','')} {(m.get('away_team') or m.get('away') or {}).get('name','')}" for m in home_form]}
+ФОРМА {home} (последни 5): {[f"{_team(m.get('home_team') or m.get('home')).get('name','')} {'–'.join(_score(m))} {_team(m.get('away_team') or m.get('away')).get('name','')}" for m in home_form]}
 
-ФОРМА {away} (последни 5): {[f"{(m.get('home_team') or m.get('home') or {}).get('name','')} {m.get('home_score','')}–{m.get('away_score','')} {(m.get('away_team') or m.get('away') or {}).get('name','')}" for m in away_form]}
+ФОРМА {away} (последни 5): {[f"{_team(m.get('home_team') or m.get('home')).get('name','')} {'–'.join(_score(m))} {_team(m.get('away_team') or m.get('away')).get('name','')}" for m in away_form]}
 
-H2H (последни 5): {[f"{(m.get('home_team') or m.get('home') or {}).get('name','')} {m.get('home_score','')}–{m.get('away_score','')} {(m.get('away_team') or m.get('away') or {}).get('name','')}" for m in h2h]}
+H2H (последни 5): {[f"{_team(m.get('home_team') or m.get('home')).get('name','')} {'–'.join(_score(m))} {_team(m.get('away_team') or m.get('away')).get('name','')}" for m in h2h]}
 
 Дай структуриран анализ. Бъди конкретен и директен. Включи ключови наблюдения, вероятни сценарии и конкретна препоръка."""
 
@@ -843,8 +883,8 @@ H2H (последни 5): {[f"{(m.get('home_team') or m.get('home') or {}).get('
             user_q = st.text_area("Въпрос към AI", placeholder="Напр. Кой е фаворит в тази среща и защо?", height=100)
             context_match = ""
             if ai_ev:
-                home = (ai_ev.get("home_team") or ai_ev.get("home") or {}).get("name", "")
-                away = (ai_ev.get("away_team") or ai_ev.get("away") or {}).get("name", "")
+                home = _team(ai_ev.get("home_team") or ai_ev.get("home")).get("name", "")
+                away = _team(ai_ev.get("away_team") or ai_ev.get("away")).get("name", "")
                 context_match = f"Контекст — текущо избран мач: {home} срещу {away}."
 
             if st.button("🤖 Изпрати") and user_q:
@@ -859,8 +899,8 @@ H2H (последни 5): {[f"{(m.get('home_team') or m.get('home') or {}).get('
                     day_events = get_events(date_from=val_date.isoformat(), date_to=val_date.isoformat(), limit=30)
                     events_summary = []
                     for ev in day_events[:15]:
-                        h = (ev.get("home_team") or ev.get("home") or {}).get("name","?")
-                        a = (ev.get("away_team") or ev.get("away") or {}).get("name","?")
+                        h = _team(ev.get("home_team") or ev.get("home")).get("name","?")
+                        a = _team(ev.get("away_team") or ev.get("away")).get("name","?")
                         lg = (ev.get("league") or ev.get("tournament") or {}).get("name","?")
                         events_summary.append(f"{lg}: {h} – {a}")
 
