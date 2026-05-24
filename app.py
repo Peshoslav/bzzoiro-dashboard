@@ -529,110 +529,172 @@ with tab_schedule:
 
 
 # ═════════════════════════════════════════════════════════════════
-# TAB 2 — НА ЖИВО
 # ═════════════════════════════════════════════════════════════════
+# TAB 2 — НА ЖИВО
+# Uses @st.fragment(run_every=N) — only THIS section reruns,
+# not the whole page. AI chat, Програма tab, etc. are untouched.
+# ═════════════════════════════════════════════════════════════════
+
+# Refresh interval options (seconds) — chosen outside the fragment
+# so the user can change it without the fragment resetting.
 with tab_live:
-    import time as _time
-    from api import get_live_events, get_event_stats, get_event_odds
+    _ri_col1, _ri_col2 = st.columns([3, 1])
+    with _ri_col1:
+        st.markdown('<div class="sec-hd">Мачове на живо</div>', unsafe_allow_html=True)
+    with _ri_col2:
+        _refresh_interval = st.select_slider(
+            "Обновяване",
+            options=[3, 5, 10, 20, 30, 60],
+            value=5,
+            format_func=lambda x: f"⚡ {x}с" if x <= 5 else f"🔄 {x}с",
+            label_visibility="collapsed",
+        )
 
-    ws_mgr.drain()
 
-    cc1, cc2 = st.columns([4, 1])
-    with cc1: st.markdown('<div class="sec-hd">Мачове на живо</div>', unsafe_allow_html=True)
-    with cc2: auto_ref = st.toggle("🔄 15 сек", value=False)
-    st.caption(ws_mgr.status)
+@st.fragment(run_every=_refresh_interval)
+def live_tab_fragment():
+    """
+    This fragment reruns every `_refresh_interval` seconds independently.
+    The rest of the app (Програма, AI chat history) is NOT re-executed.
+    """
+    from api import get_live_events
+
+    # Drain WebSocket queue — get latest frames since last run
+    new_frames = ws_mgr.drain()
+
+    # Status bar
+    _s1, _s2 = st.columns([4, 1])
+    with _s1:
+        if new_frames:
+            st.caption(f"{ws_mgr.status}  ·  +{len(new_frames)} нови кадъра")
+        else:
+            st.caption(ws_mgr.status)
+    with _s2:
+        # Last updated timestamp
+        from datetime import datetime
+        st.caption(datetime.now().strftime("%H:%M:%S"))
 
     live_events = get_live_events()
 
     if not live_events:
         st.info("⏳ Няма мачове на живо в момента.")
-    else:
-        for lev in live_events:
-            eid       = lev.get("id")
-            home_obj  = _team(lev.get("home_team") or lev.get("home"))
-            away_obj  = _team(lev.get("away_team") or lev.get("away"))
-            home_name = home_obj.get("name","?")
-            away_name = away_obj.get("name","?")
+        return
 
-            if eid and eid not in ws_mgr.subscribed:
-                ws_mgr.subscribe(eid)
+    for lev in live_events:
+        eid       = lev.get("id")
+        home_obj  = _team(lev.get("home_team") or lev.get("home"))
+        away_obj  = _team(lev.get("away_team") or lev.get("away"))
+        home_name = home_obj.get("name","?")
+        away_name = away_obj.get("name","?")
 
-            snap    = ws_mgr.snapshots.get(eid, {})
-            _sc     = snap.get("score") or {}
-            sh      = str(_sc.get("home", lev.get("home_score","–")) or "–")
-            sa      = str(_sc.get("away", lev.get("away_score","–")) or "–")
-            minute  = (snap.get("time") or {}).get("minute", _minute(lev))
-            tick    = snap.get("livedata") or {}
-            sit     = tick.get("situation","")
-            sit_sid = tick.get("side","")
-            sit_icons = {"attack":"⚡","goal":"⚽","corner":"🚩",
-                         "free_kick":"🎯","penalty":"🔴","substitution":"🔄",
-                         "dangerous_attack":"💥","ball_safe":"🛡️"}
-            sit_str = (f"{sit_icons.get(sit,'🏃')} {sit.replace('_',' ').title()} "
-                       f"· {'🏠' if sit_sid=='home' else '✈️' if sit_sid=='away' else ''}"
-                       ) if sit else ""
+        # Subscribe to WebSocket for this match
+        if eid and eid not in ws_mgr.subscribed:
+            ws_mgr.subscribe(eid)
 
-            exp_label = f"🔴  {home_name}  {sh}–{sa}  {away_name}  {f'· {minute}′' if minute else ''}"
+        snap    = ws_mgr.snapshots.get(eid, {})
+        _sc     = snap.get("score") or {}
+        sh      = str(_sc.get("home", lev.get("home_score","–")) or "–")
+        sa      = str(_sc.get("away", lev.get("away_score","–")) or "–")
+        minute  = (snap.get("time") or {}).get("minute", _minute(lev))
+        tick    = snap.get("livedata") or {}
+        sit     = tick.get("situation","")
+        sit_sid = tick.get("side","")
+        sit_icons = {"attack":"⚡","goal":"⚽","corner":"🚩",
+                     "free_kick":"🎯","penalty":"🔴","substitution":"🔄",
+                     "dangerous_attack":"💥","ball_safe":"🛡️"}
+        sit_str = (
+            f"{sit_icons.get(sit,'🏃')} {sit.replace('_',' ').title()} "
+            f"· {'🏠' if sit_sid=='home' else '✈️' if sit_sid=='away' else ''}"
+        ) if sit else ""
 
-            with st.expander(exp_label, expanded=True):
-                sc, ai = st.columns([1,1], gap="large")
+        exp_label = (f"🔴  {home_name}  {sh}–{sa}  {away_name}"
+                     f"  {f'· {minute}′' if minute else ''}")
 
-                with sc:
-                    lg = _league(lev)
-                    hdr = f"{lg}{'  ·  ' + sit_str if sit_str else ''}"
-                    st.markdown(f'<div class="sec-hd">{hdr}</div>', unsafe_allow_html=True)
+        with st.expander(exp_label, expanded=True):
+            stats_col, ai_col = st.columns([1, 1], gap="large")
 
-                    ws_stats = snap.get("stats",{})
-                    if ws_stats:
-                        hs  = ws_stats.get("home",{})
-                        as_ = ws_stats.get("away",{})
-                        ph  = int(extract_stat(hs,"ball_possession"))
-                        pa  = int(extract_stat(as_,"ball_possession"))
-                        st.markdown(
-                            f'<div style="display:flex;justify-content:space-between;margin:.4rem 0">'
-                            f'<span style="font-size:1.4rem;font-weight:800;color:#00d4aa">{ph}%</span>'
-                            f'<span style="font-size:.65rem;color:#6b7280;align-self:center">ОВЛАДЯВАНЕ</span>'
-                            f'<span style="font-size:1.4rem;font-weight:800;color:#f59e0b">{pa}%</span>'
-                            f'</div>', unsafe_allow_html=True)
-                        for lbl, key in [
-                            ("Удари","total_shots"),("В рамка","shots_on_target"),
-                            ("xG","xg"),("Ъглови","corner_kicks"),
-                            ("Опасни атаки","dangerous_attack"),
-                            ("Фаулове","fouls"),("Жълти картони","yellow_cards")]:
-                            hv = extract_stat(hs,key); av = extract_stat(as_,key)
-                            if hv or av: render_stat_bar(lbl, hv, av)
-                    else:
-                        st.caption("⏳ Изчакване на WebSocket данни…")
-                        render_event_stats_panel(eid, home_name, away_name)
+            # ── Left: live stats ──────────────────────────────────
+            with stats_col:
+                lg  = _league(lev)
+                hdr = f"{lg}{'  ·  ' + sit_str if sit_str else ''}"
+                st.markdown(f'<div class="sec-hd">{hdr}</div>',
+                            unsafe_allow_html=True)
 
-                    ws_odds = snap.get("odds")
-                    if ws_odds: st.markdown(""); render_odds_row(ws_odds)
+                ws_stats = snap.get("stats", {})
+                if ws_stats:
+                    hs  = ws_stats.get("home", {})
+                    as_ = ws_stats.get("away", {})
+                    ph  = int(extract_stat(hs,  "ball_possession"))
+                    pa  = int(extract_stat(as_, "ball_possession"))
+                    st.markdown(
+                        f'<div style="display:flex;justify-content:space-between;margin:.4rem 0">'
+                        f'<span style="font-size:1.4rem;font-weight:800;color:#00d4aa">{ph}%</span>'
+                        f'<span style="font-size:.65rem;color:#6b7280;align-self:center">ОВЛАДЯВАНЕ</span>'
+                        f'<span style="font-size:1.4rem;font-weight:800;color:#f59e0b">{pa}%</span>'
+                        f'</div>', unsafe_allow_html=True)
+                    for lbl, key in [
+                        ("Удари",         "total_shots"),
+                        ("В рамка",       "shots_on_target"),
+                        ("xG",            "xg"),
+                        ("Ъглови",        "corner_kicks"),
+                        ("Опасни атаки",  "dangerous_attack"),
+                        ("Атаки",         "attack"),
+                        ("Фаулове",       "fouls"),
+                        ("Жълти картони", "yellow_cards"),
+                        ("Спасявания",    "goalkeeper_saves"),
+                    ]:
+                        hv = extract_stat(hs, key)
+                        av = extract_stat(as_, key)
+                        if hv or av:
+                            render_stat_bar(lbl, hv, av)
+                else:
+                    st.caption("⏳ Изчакване на WebSocket данни…")
+                    # Fallback to REST stats while WS warms up
+                    render_event_stats_panel(eid, home_name, away_name)
 
-                with ai:
-                    ws_stats_now = snap.get("stats",{})
-                    hs2  = ws_stats_now.get("home",{}) if ws_stats_now else {}
-                    as_2 = ws_stats_now.get("away",{}) if ws_stats_now else {}
-                    live_ctx = ""
-                    if ws_stats_now:
-                        live_ctx = (
-                            f"\nLIVE WS: {home_name} "
-                            f"удари={extract_stat(hs2,'total_shots')} "
-                            f"xG={extract_stat(hs2,'xg')} "
-                            f"поз={extract_stat(hs2,'ball_possession')}% | "
-                            f"{away_name} "
-                            f"удари={extract_stat(as_2,'total_shots')} "
-                            f"xG={extract_stat(as_2,'xg')} "
-                            f"поз={extract_stat(as_2,'ball_possession')}%"
-                        )
-                    if sit_str: live_ctx += f"\nСИТУАЦИЯ: {sit_str}"
-                    mw = ((snap.get("odds") or {}).get("odds") or {}).get("match_winner",{}) or {}
-                    if mw: live_ctx += f"\nЖИВИ КОЕФИЦИЕНТИ: 1={mw.get('home','?')} X={mw.get('draw','?')} 2={mw.get('away','?')}"
+                # Live odds from WebSocket
+                ws_odds = snap.get("odds")
+                if ws_odds:
+                    st.markdown("")
+                    render_odds_row(ws_odds)
 
-                    st.markdown(f'<div class="sec-hd">🤖 AI — {home_name} vs {away_name}</div>',
-                                unsafe_allow_html=True)
-                    render_inline_ai(lev, f"ai_live_{eid}", home_name, away_name,
-                                     event_id=eid, extra_ctx=live_ctx)
+            # ── Right: AI chat ────────────────────────────────────
+            with ai_col:
+                # Build live context for Gemini from latest WS snapshot
+                ws_stats_now = snap.get("stats", {})
+                hs2  = ws_stats_now.get("home", {}) if ws_stats_now else {}
+                as_2 = ws_stats_now.get("away", {}) if ws_stats_now else {}
+                live_ctx = ""
+                if ws_stats_now:
+                    live_ctx = (
+                        f"\nLIVE WS ДАННИ: "
+                        f"{home_name} — "
+                        f"удари={extract_stat(hs2,'total_shots')} "
+                        f"xG={extract_stat(hs2,'xg'):.2f} "
+                        f"поз={extract_stat(hs2,'ball_possession'):.0f}% "
+                        f"оп.атаки={extract_stat(hs2,'dangerous_attack')} | "
+                        f"{away_name} — "
+                        f"удари={extract_stat(as_2,'total_shots')} "
+                        f"xG={extract_stat(as_2,'xg'):.2f} "
+                        f"поз={extract_stat(as_2,'ball_possession'):.0f}% "
+                        f"оп.атаки={extract_stat(as_2,'dangerous_attack')}"
+                    )
+                if sit_str:
+                    live_ctx += f"\nСИТУАЦИЯ: {sit_str}"
+                mw = ((snap.get("odds") or {}).get("odds") or {}).get("match_winner", {}) or {}
+                if mw:
+                    live_ctx += (f"\nЖИВИ КОЕФИЦИЕНТИ: "
+                                 f"1={mw.get('home','?')} "
+                                 f"X={mw.get('draw','?')} "
+                                 f"2={mw.get('away','?')}")
 
-    if auto_ref:
-        _time.sleep(15)
-        st.rerun()
+                st.markdown(
+                    f'<div class="sec-hd">🤖 AI — {home_name} vs {away_name}</div>',
+                    unsafe_allow_html=True)
+                render_inline_ai(lev, f"ai_live_{eid}", home_name, away_name,
+                                 event_id=eid, extra_ctx=live_ctx)
+
+
+# Run the fragment inside the tab
+with tab_live:
+    live_tab_fragment()
