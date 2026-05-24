@@ -325,9 +325,13 @@ def render_inline_ai(match_obj: Dict, chat_key: str,
 # MATCH DETAIL — called only after "Зареди" button
 # ═════════════════════════════════════════════════════════════════
 def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
-                        home_id, away_id, n_last: int, is_finished: bool):
+                        home_id, away_id, is_finished: bool):
     from api import (get_event_stats, get_event_odds, get_prediction,
                      get_team_fixtures, get_h2h)
+
+    # Per-match slider for number of recent fixtures
+    n_last = st.slider("Последни мачове за форма", 3, 15, 5,
+                       key=f"nlast_{eid}")
 
     # Quick AI context string (no blocking calls — reuse cached data)
     ctx = (f"home_id={home_id} away_id={away_id} event_id={eid} "
@@ -445,13 +449,12 @@ tab_schedule, tab_live = st.tabs(["📅 Програма", "🔴 На Живо"]
 with tab_schedule:
     from api import get_leagues, get_events
 
-    fc1, fc2, fc3 = st.columns([1.5, 2, 1])
+    fc1, fc2 = st.columns([1.5, 2])
     with fc1: sel_date = st.date_input("Дата", value=date.today())
     with fc2:
         leagues_list = get_leagues()
         lnames = ["Всички"] + [l.get("name","") for l in leagues_list if l.get("name")]
         sel_lg = st.selectbox("Лига", lnames)
-    with fc3: n_last = st.slider("Посл. мачове", 3, 15, 5)
 
     date_str  = sel_date.isoformat()
     league_id = None
@@ -493,7 +496,7 @@ with tab_schedule:
                 status    = _status(m)
                 minute    = _minute(m)
 
-                is_live     = status in ("inprogress","live","1h","2h","ht","et","pen")
+                is_live     = status in ("inprogress","live","1h","2h","ht","et","pen","in_progress","playing","1st_half","2nd_half","halftime","extra_time","penalties","paused")
                 is_finished = status in ("finished","ft","aet","pen_finished","ended","complete")
 
                 if is_live:
@@ -521,7 +524,7 @@ with tab_schedule:
                         away_id = ids.get("away_id")
                         render_match_detail(
                             m, eid, home_name, away_name,
-                            home_id, away_id, n_last, is_finished
+                            home_id, away_id, is_finished
                         )
 
 
