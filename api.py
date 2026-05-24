@@ -115,6 +115,57 @@ def get_team(team_id: int) -> Dict:
         return {}
 
 
+@st.cache_data(ttl=3600)
+def search_team_by_name(name: str) -> Optional[Dict]:
+    """
+    Search for a team by name and return the best match as a dict
+    {"id": ..., "name": ...}, or None if not found.
+
+    Tries two strategies:
+      1. GET /teams/?search=<name>  (preferred — direct search)
+      2. GET /teams/?name=<name>    (fallback param name)
+    Then does a client-side case-insensitive exact/prefix match.
+    Results are cached for 1 hour — safe to call on every rerun.
+    """
+    if not name or not name.strip():
+        return None
+    name_clean = name.strip()
+    for params in ({"search": name_clean, "limit": 10},
+                   {"name":   name_clean, "limit": 10}):
+        try:
+            data    = _get("/teams/", params)
+            results = data.get("results", data) if isinstance(data, dict) else data
+            if not isinstance(results, list):
+                continue
+            # Exact match first, then prefix, then substring
+            lower = name_clean.lower()
+            for strategy in ("exact", "prefix", "sub"):
+                for t in results:
+                    tname = (t.get("name") or "").lower()
+                    if strategy == "exact"  and tname == lower:        return t
+                    if strategy == "prefix" and tname.startswith(lower): return t
+                    if strategy == "sub"    and lower in tname:         return t
+        except Exception:
+            continue
+    return None
+
+
+@st.cache_data(ttl=1800)
+def resolve_team_id(name_or_id: Any) -> Optional[int]:
+    """
+    Given either an int team_id or a string team name, return the team_id.
+    Returns None if lookup fails.
+    Uses search_team_by_name for strings.
+    """
+    if isinstance(name_or_id, int):
+        return name_or_id
+    if isinstance(name_or_id, str) and name_or_id.strip():
+        team = search_team_by_name(name_or_id.strip())
+        if team:
+            return team.get("id")
+    return None
+
+
 @st.cache_data(ttl=300)
 def get_team_fixtures(team_id: int, last_n: int = 10) -> List[Dict]:
     """
@@ -147,11 +198,20 @@ def get_h2h(team1_id: int, team2_id: int, last_n: int = 10) -> List[Dict]:
     """
     try:
         all_fixtures = get_team_fixtures(team1_id, last_n=50)
+
+        def _tid(val):
+            if isinstance(val, dict):
+                return val.get("id")
+            return None  # string team name — can't filter by ID
+
         h2h = [
             m for m in all_fixtures
-            if (m.get("home_team", {}).get("id") == team2_id
-                or m.get("away_team", {}).get("id") == team2_id)
+            if (_tid(m.get("home_team") or m.get("home")) == team2_id
+                or _tid(m.get("away_team") or m.get("away")) == team2_id)
         ]
+        # If team IDs were None (string names), fall back to returning all fixtures
+        if not h2h and team1_id is None:
+            return all_fixtures[:last_n]
         return h2h[:last_n]
     except Exception:
         return []
