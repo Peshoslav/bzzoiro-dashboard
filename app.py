@@ -14,7 +14,7 @@ from typing import Dict, List, Any, Optional
 from api import (
     get_events, get_live_events, get_event_stats,
     get_event_odds, get_team_fixtures, get_h2h,
-    get_leagues, get_prediction,
+    get_leagues, get_prediction, resolve_team_id,
 )
 from ws_manager import get_ws_manager
 
@@ -190,6 +190,15 @@ def _kickoff(m: Dict) -> str:
         v = m.get(k)
         if v: return bg_time(str(v))
     return ""
+
+def _resolve_ids(home_obj: Dict, away_obj: Dict):
+    """
+    Return (home_id, away_id) — resolves via name search when IDs are missing.
+    Results come from resolve_team_id which is itself cached.
+    """
+    hid = home_obj.get("id") or resolve_team_id(home_obj.get("name", ""))
+    aid = away_obj.get("id") or resolve_team_id(away_obj.get("name", ""))
+    return hid, aid
 
 def _minute(m: Dict) -> str:
     return str(m.get("minute", "") or (m.get("time") or {}).get("minute", "") or "")
@@ -466,8 +475,7 @@ with tab_schedule:
                 away_obj  = _team(m.get("away_team") or m.get("away"))
                 home_name = home_obj.get("name","?")
                 away_name = away_obj.get("name","?")
-                home_id   = home_obj.get("id")
-                away_id   = away_obj.get("id")
+                home_id, away_id = _resolve_ids(home_obj, away_obj)
                 sh, sa    = _score(m)
                 ko        = _kickoff(m)
                 status    = _status(m)
@@ -540,7 +548,7 @@ with tab_schedule:
                                 [(home_id, home_name), (away_id, away_name)], start=1):
                             with inner[tab_idx]:
                                 if not tid:
-                                    st.caption("ID на отбора не е наличен.")
+                                    st.warning(f"⚠️ Не може да се намери ID за {tname}. Проверете дали API-то поддържа търсене по име.")
                                     continue
                                 fixes = get_team_fixtures(tid, last_n=n_last)
                                 if not fixes:
@@ -614,7 +622,7 @@ with tab_schedule:
                                 [(home_id, home_name), (away_id, away_name)]):
                             with inner[tab_idx]:
                                 if not tid:
-                                    st.caption("ID на отбора не е наличен — API-то връща само имена за предстоящи мачове.")
+                                    st.warning(f"⚠️ Не може да се намери ID за {tname}. Проверете дали API-то поддържа търсене по име.")
                                     continue
                                 fixes = get_team_fixtures(tid, last_n=n_last)
                                 if not fixes:
