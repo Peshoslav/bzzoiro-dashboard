@@ -246,6 +246,137 @@ def render_odds_row(odds: Dict):
                         unsafe_allow_html=True)
 
 
+def render_prediction_panel(home_name: str, away_name: str,
+                             home_id, away_id,
+                             home_fixtures: List[Dict],
+                             away_fixtures: List[Dict],
+                             h2h_matches:  List[Dict]):
+    """
+    Full Dixon-Coles prediction panel.
+    Designed to replace / supplement the empty API prediction section.
+    """
+    from predictor import predict_match
+
+    if len(home_fixtures) < 1 and len(away_fixtures) < 1:
+        st.info("Няма достатъчно форм данни за прогноза.")
+        return
+
+    with st.spinner("Изчисляване на прогноза…"):
+        p = predict_match(
+            home_name, away_name,
+            home_fixtures, away_fixtures,
+            h2h_matches,
+        )
+
+    if p["warning"]:
+        st.warning(p["warning"])
+
+    # ── Confidence bar ────────────────────────────────────────────
+    conf       = p["confidence"]
+    conf_color = "#22c55e" if conf >= 70 else "#f59e0b" if conf >= 40 else "#ef4444"
+    st.markdown(f"""
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem">
+      <span style="font-size:.7rem;color:#6b7280;min-width:80px">Надеждност</span>
+      <div style="flex:1;background:#1e2737;border-radius:4px;height:7px">
+        <div style="width:{conf}%;background:{conf_color};
+                    border-radius:4px;height:100%"></div>
+      </div>
+      <span style="font-size:.75rem;font-weight:700;color:{conf_color}">{conf}%</span>
+    </div>
+    <div style="font-size:.65rem;color:#4b5563;margin-bottom:1rem">
+      Базирано на {p['home_matches_used']} мача ({home_name}) и
+      {p['away_matches_used']} мача ({away_name})
+      {f"+ {len(h2h_matches)} H2H" if h2h_matches else ""}
+    </div>""", unsafe_allow_html=True)
+
+    # ── Win probability big display ───────────────────────────────
+    hw = int(p["home_win"] * 100)
+    dw = int(p["draw"]     * 100)
+    aw = 100 - hw - dw
+
+    st.markdown(f"""
+    <div style="display:flex;gap:3px;border-radius:10px;overflow:hidden;
+                margin-bottom:.5rem;height:44px">
+      <div style="flex:{hw};background:linear-gradient(135deg,#00d4aa,#0ea5e9);
+                  display:flex;align-items:center;justify-content:center">
+        <span style="font-size:.95rem;font-weight:800;color:#0d1117">{hw}%</span>
+      </div>
+      <div style="flex:{dw};background:#2d3748;
+                  display:flex;align-items:center;justify-content:center;min-width:32px">
+        <span style="font-size:.85rem;font-weight:700;color:#e2e8f0">{dw}%</span>
+      </div>
+      <div style="flex:{aw};background:linear-gradient(135deg,#f59e0b,#ef4444);
+                  display:flex;align-items:center;justify-content:center">
+        <span style="font-size:.95rem;font-weight:800;color:#0d1117">{aw}%</span>
+      </div>
+    </div>
+    <div style="display:flex;justify-content:space-between;
+                font-size:.7rem;color:#6b7280;margin-bottom:1rem">
+      <span>🏠 {home_name}</span><span>Равен</span><span>✈️ {away_name}</span>
+    </div>""", unsafe_allow_html=True)
+
+    # ── xG & market tiles ─────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns(4)
+    tiles = [
+        (c1, f"{p['home_xg']:.2f}", f"xG {home_name[:10]}"),
+        (c2, f"{p['away_xg']:.2f}", f"xG {away_name[:10]}"),
+        (c3, f"{int(p['btts']*100)}%", "BTTS"),
+        (c4, f"{int(p['over25']*100)}%", "Над 2.5 гола"),
+    ]
+    for col, val, lbl in tiles:
+        col.markdown(f'<div class="tile"><div class="tile-val">{val}</div>'
+                     f'<div class="tile-lbl">{lbl}</div></div>',
+                     unsafe_allow_html=True)
+
+    # ── Over/Under breakdown ──────────────────────────────────────
+    st.markdown("")
+    st.markdown('<div class="sec-hd">Брой голове</div>', unsafe_allow_html=True)
+    ou_cols = st.columns(6)
+    ou_data = [
+        ("O0.5", p["over05"]),  ("O1.5", p["over15"]),
+        ("O2.5", p["over25"]),  ("O3.5", p["over35"]),
+        ("U2.5", p["under25"]), ("BTTS", p["btts"]),
+    ]
+    for col, (lbl, prob) in zip(ou_cols, ou_data):
+        pct = int(prob * 100)
+        color = "#22c55e" if pct >= 65 else "#f59e0b" if pct >= 45 else "#6b7280"
+        col.markdown(
+            f'<div class="oc"><div class="ol">{lbl}</div>'
+            f'<div class="ov" style="color:{color}">{pct}%</div></div>',
+            unsafe_allow_html=True)
+
+    # ── Top scorelines ────────────────────────────────────────────
+    st.markdown("")
+    st.markdown('<div class="sec-hd">Най-вероятни резултати</div>',
+                unsafe_allow_html=True)
+
+    top = p["top_scorelines"][:8]
+    max_prob = top[0]["prob"] if top else 0.01
+
+    for sc in top:
+        pct   = int(sc["prob"] * 100)
+        bar_w = int(sc["prob"] / max_prob * 100)
+        if sc["h"] > sc["a"]:   winner = "🏠"; wcolor = "#00d4aa"
+        elif sc["h"] < sc["a"]: winner = "✈️"; wcolor = "#f59e0b"
+        else:                   winner = "⚖️"; wcolor = "#9ca3af"
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;gap:.5rem;margin:.2rem 0">
+          <span style="min-width:40px;font-size:.9rem;font-weight:800;
+                       color:#e2e8f0;text-align:center">{sc['h']}–{sc['a']}</span>
+          <span style="font-size:.8rem">{winner}</span>
+          <div style="flex:1;background:#1e2737;border-radius:3px;height:6px">
+            <div style="width:{bar_w}%;background:{wcolor};
+                        border-radius:3px;height:100%;opacity:.8"></div>
+          </div>
+          <span style="min-width:32px;font-size:.75rem;font-weight:700;
+                       color:{wcolor};text-align:right">{pct}%</span>
+        </div>""", unsafe_allow_html=True)
+
+    st.caption(f"Среден брой голове в извадката: "
+               f"{p['league_avg_goals']:.1f} на мач  ·  "
+               f"Dixon-Coles модел с time-decay и H2H тегла")
+
+
 # ═════════════════════════════════════════════════════════════════
 # AI CHAT — Gemini with Tool Calling
 # ═════════════════════════════════════════════════════════════════
@@ -550,6 +681,29 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
     ctx = (f"home_id={home_id} away_id={away_id} event_id={eid} "
            f"home={home_name} away={away_name}{lineup_ctx}")
 
+    # Add Dixon-Coles prediction to AI context (computed lazily, cached)
+    try:
+        from predictor import predict_match
+        _hfx = get_team_fixtures(team_id=home_id, team_name=home_name, last_n=15)
+        _afx = get_team_fixtures(team_id=away_id, team_name=away_name, last_n=15)
+        _h2h = get_h2h(home_id, away_id, home_name=home_name, away_name=away_name, last_n=8)
+        _pred = predict_match(home_name, away_name, _hfx, _afx, _h2h)
+        ctx += (
+            f"\n\nДИКСОН-КОУЛС ПРОГНОЗА:"
+            f"\n  {home_name} победа: {int(_pred['home_win']*100)}%"
+            f"  Равен: {int(_pred['draw']*100)}%"
+            f"  {away_name} победа: {int(_pred['away_win']*100)}%"
+            f"\n  xG: {home_name}={_pred['home_xg']}  {away_name}={_pred['away_xg']}"
+            f"\n  BTTS: {int(_pred['btts']*100)}%"
+            f"  Над 2.5 гола: {int(_pred['over25']*100)}%"
+            f"\n  Топ резултат: "
+            f"{_pred['top_scorelines'][0]['h']}–{_pred['top_scorelines'][0]['a']} "
+            f"({int(_pred['top_scorelines'][0]['prob']*100)}%)"
+            f"\n  Надеждност на модела: {_pred['confidence']}%"
+        )
+    except Exception:
+        pass
+
     if is_finished:
         # FINISHED: Stats | Home | Away | H2H | Shotmap | Incidents | Odds | AI
         tabs = st.tabs(["📊 Статистики", f"🏠 {home_name[:13]}",
@@ -637,37 +791,36 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
 
     # ── Odds / Prediction tab ─────────────────────────────────────
     with tabs[odds_tab_idx]:
-        has_content = False
+
+        # ── 1. Dixon-Coles model prediction (always shown) ────────
+        st.markdown('<div class="sec-hd">🧮 Статистическа прогноза (Dixon-Coles)</div>',
+                    unsafe_allow_html=True)
+        # Load form data (already cached from team tabs — free re-call)
+        home_fx = get_team_fixtures(team_id=home_id, team_name=home_name, last_n=15)
+        away_fx = get_team_fixtures(team_id=away_id, team_name=away_name, last_n=15)
+        h2h_fx  = get_h2h(home_id, away_id,
+                           home_name=home_name, away_name=away_name,
+                           last_n=8)
+        render_prediction_panel(home_name, away_name,
+                                home_id, away_id,
+                                home_fx, away_fx, h2h_fx)
+
+        # ── 2. Bookmaker odds for comparison ──────────────────────
+        st.markdown("")
+        st.markdown('<div class="sec-hd">💰 Букмейкърски коефициенти</div>',
+                    unsafe_allow_html=True)
+        shown_odds = False
         if eid:
-            # Try bookmaker comparison first
             bk_data = get_odds_comparison(eid)
             if bk_data:
-                has_content = render_bookmaker_odds(bk_data, home_name, away_name) or False
-
-            # Fall back to consensus odds
-            if not has_content:
+                shown_odds = render_bookmaker_odds(bk_data, home_name, away_name) or False
+            if not shown_odds:
                 odds = get_event_odds(eid)
                 if odds:
                     render_odds_row(odds)
-                    has_content = True
-
-            # ML prediction for upcoming/live
-            if not is_finished:
-                pred = get_prediction(eid)
-                if pred:
-                    st.markdown("---")
-                    st.markdown("**🤖 ML Прогноза**")
-                    pc1, pc2, pc3 = st.columns(3)
-                    ph  = pred.get("home_win_pct")  or pred.get("home_probability")
-                    pd_ = pred.get("draw_pct")       or pred.get("draw_probability")
-                    pa  = pred.get("away_win_pct")  or pred.get("away_probability")
-                    if ph:  pc1.metric("1", f"{float(ph):.0f}%")
-                    if pd_: pc2.metric("X", f"{float(pd_):.0f}%")
-                    if pa:  pc3.metric("2", f"{float(pa):.0f}%")
-                    has_content = True
-
-        if not has_content:
-            st.info("Коефициенти и прогноза не са налични за този мач.")
+                    shown_odds = True
+        if not shown_odds:
+            st.caption("Букмейкърски коефициенти не са налични от API-то.")
 
     # ── AI ────────────────────────────────────────────────────────
     with tabs[ai_tab_idx]:
