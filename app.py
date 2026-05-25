@@ -1062,23 +1062,52 @@ def live_tab_fragment():
                     st.markdown("")
                     render_odds_row(ws_odds)
 
-                # ── Simple visual panels from WS series ───────────
+                # ── КОЙ НАТИСКА? — uses ws_stats primary, REST fallback ──
+                # Get stats from the snapshot (already loaded above)
                 ser       = ws_mgr.series.get(eid, {})
-                xg_h_list = ser.get("xg_home", [])
-                xg_a_list = ser.get("xg_away", [])
-                att_h_list = ser.get("att_home", [])
-                att_a_list = ser.get("att_away", [])
 
-                if xg_h_list and xg_a_list:
-                    xg_h_val  = xg_h_list[-1]
-                    xg_a_val  = xg_a_list[-1]
-                    att_h_val = att_h_list[-1] if att_h_list else 0
-                    att_a_val = att_a_list[-1] if att_a_list else 0
+                # Primary: WS snapshot stats (available for most matches)
+                _snap_stats = snap.get("stats", {})
+                if _snap_stats:
+                    _hs  = _snap_stats.get("home", {})
+                    _as_ = _snap_stats.get("away", {})
+                else:
+                    # Fallback: REST stats (for matches where WS stats frame
+                    # hasn't arrived yet but REST has data)
+                    _rest = get_event_stats(eid) if eid else {}
+                    _hs  = _rest.get("home", {}) if _rest else {}
+                    _as_ = _rest.get("away", {}) if _rest else {}
 
-                    # ── Helper: simple two-sided bar ───────────────
-                    def _two_bar(lbl, h_val, a_val, h_color="#00d4aa", a_color="#f59e0b",
-                                 fmt=lambda x: str(int(x)),
-                                 tooltip=""):
+                # Extract values — prefer WS series history for xG (cumulative)
+                # but fall back to snapshot value
+                att_h_val   = extract_stat(_hs, "dangerous_attack")
+                att_a_val   = extract_stat(_as_, "dangerous_attack")
+                shots_h_val = extract_stat(_hs, "shots_on_target")
+                shots_a_val = extract_stat(_as_, "shots_on_target")
+                # xG: use series last value if available, else snapshot
+                xg_h_ser = ser.get("xg_home", [])
+                xg_a_ser = ser.get("xg_away", [])
+                xg_h_val = xg_h_ser[-1] if xg_h_ser else extract_stat(_hs, "xg")
+                xg_a_val = xg_a_ser[-1] if xg_a_ser else extract_stat(_as_, "xg")
+
+                # Only skip if we have absolutely nothing
+                has_any = any([att_h_val, att_a_val, shots_h_val,
+                               shots_a_val, xg_h_val, xg_a_val,
+                               extract_stat(_hs, "total_shots"),
+                               extract_stat(_hs, "ball_possession")])
+
+                if has_any:
+                    # total_shots as fallback if no dangerous_attack data
+                    if not att_h_val and not att_a_val:
+                        att_h_val = extract_stat(_hs,  "total_shots")
+                        att_a_val = extract_stat(_as_, "total_shots")
+                        att_label = "Общо удари"
+                    else:
+                        att_label = "Опасни атаки"
+
+                    def _two_bar(lbl, h_val, a_val,
+                                 h_color="#00d4aa", a_color="#f59e0b",
+                                 fmt=lambda x: str(int(x)), tooltip=""):
                         total = h_val + a_val or 1
                         ph    = max(4, min(96, int(h_val / total * 100)))
                         pa    = 100 - ph
@@ -1096,37 +1125,45 @@ def live_tab_fragment():
   </div>
 </div>"""
 
-                    # ── xG panel ──────────────────────────────────
-                    # Explain xG simply
-                    xg_label = "Качество на ударите (xG)"
-                    xg_tip   = ("xG = очаквани голове. По-голямото число означава "
-                                "по-опасни удари. 1.0 xG = трябва да е гол.")
-                    shots_h  = ser.get("shots_home", [])
-                    shots_a  = ser.get("shots_away", [])
-                    shots_h_val = shots_h[-1] if shots_h else 0
-                    shots_a_val = shots_a[-1] if shots_a else 0
+                    st.markdown('<div class="sec-hd">⚽ КОЙ НАТИСКА?</div>',
+                                unsafe_allow_html=True)
 
-                    st.markdown(
-                        '<div class="sec-hd">⚽ КОЙ НАТИСКА?</div>',
-                        unsafe_allow_html=True)
+                    bars_html = f"""
+<div style="display:flex;justify-content:space-between;
+            margin-bottom:.5rem;font-size:.72rem;font-weight:700">
+  <span style="color:#00d4aa">🏠 {home_name}</span>
+  <span style="color:#f59e0b">✈️ {away_name}</span>
+</div>"""
 
-                    bars_html = ""
                     bars_html += _two_bar(
-                        "Опасни атаки", att_h_val, att_a_val,
+                        att_label, att_h_val, att_a_val,
                         tooltip="Колко пъти всеки отбор е заплашил вратата")
-                    bars_html += _two_bar(
-                        "Удари в рамка", shots_h_val, shots_a_val,
-                        tooltip="Удари, които вратарят е трябвало да спасява")
-                    bars_html += _two_bar(
-                        xg_label, xg_h_val, xg_a_val,
-                        fmt=lambda x: f"{x:.2f}",
-                        tooltip=xg_tip)
 
-                    # Who is dominating indicator
-                    if att_h_val + att_a_val > 0:
-                        dom_pct  = int(att_h_val / (att_h_val + att_a_val) * 100)
-                        dom_name = home_name if dom_pct >= 50 else away_name
-                        dom_val  = dom_pct if dom_pct >= 50 else 100 - dom_pct
+                    if shots_h_val or shots_a_val:
+                        bars_html += _two_bar(
+                            "Удари в рамка", shots_h_val, shots_a_val,
+                            tooltip="Удари, които вратарят е трябвало да спасява")
+
+                    if xg_h_val or xg_a_val:
+                        bars_html += _two_bar(
+                            "Качество на ударите (xG)", xg_h_val, xg_a_val,
+                            fmt=lambda x: f"{x:.2f}",
+                            tooltip="xG: 1.0 = трябваше да е гол. По-голямо = по-опасно.")
+
+                    poss_h = extract_stat(_hs, "ball_possession")
+                    poss_a = extract_stat(_as_, "ball_possession")
+                    if poss_h or poss_a:
+                        bars_html += _two_bar(
+                            "Овладяване %", poss_h, poss_a,
+                            fmt=lambda x: f"{int(x)}%")
+
+                    # Domination summary
+                    dom_base_h = att_h_val or poss_h
+                    dom_base_a = att_a_val or poss_a
+                    if dom_base_h + dom_base_a > 0:
+                        dom_pct   = int(dom_base_h / (dom_base_h + dom_base_a) * 100)
+                        dom_name  = home_name if dom_pct >= 50 else away_name
+                        dom_val   = dom_pct if dom_pct >= 50 else 100 - dom_pct
                         dom_color = "#00d4aa" if dom_pct >= 50 else "#f59e0b"
                         bars_html += f"""
 <div style="margin-top:.7rem;padding:.6rem .8rem;
@@ -1134,53 +1171,36 @@ def live_tab_fragment():
             border-left:3px solid {dom_color}">
   <span style="font-size:.72rem;color:#6b7280">Доминира: </span>
   <span style="font-size:.9rem;font-weight:700;color:{dom_color}">{dom_name}</span>
-  <span style="font-size:.72rem;color:#6b7280"> ({dom_val}% от атаките)</span>
+  <span style="font-size:.72rem;color:#6b7280"> ({dom_val}%)</span>
 </div>"""
-
-                    # Team name legend
-                    bars_html = f"""
-<div style="display:flex;justify-content:space-between;
-            margin-bottom:.5rem;font-size:.72rem;font-weight:700">
-  <span style="color:#00d4aa">🏠 {home_name}</span>
-  <span style="color:#f59e0b">✈️ {away_name}</span>
-</div>""" + bars_html
 
                     st.markdown(bars_html, unsafe_allow_html=True)
 
-                    # ── xG trend: simple emoji timeline ───────────
+                    # ── Timeline from WS series (only if enough points) ──
                     mins_list = ser.get("minutes", [])
-                    if len(mins_list) >= 4:
+                    if len(mins_list) >= 4 and xg_h_ser and xg_a_ser:
                         st.markdown(
                             '<div class="sec-hd" style="margin-top:.8rem">'
                             '📈 КАК СЕ РАЗВИВА МАЧЪТ</div>',
                             unsafe_allow_html=True)
-
-                        # Divide match into segments and show who led in each
                         n       = len(mins_list)
-                        segs    = 6  # split into 6 segments
+                        segs    = 6
                         seg_len = max(1, n // segs)
                         timeline_html = '<div style="display:flex;gap:3px;margin-top:.3rem">'
-
                         for s in range(segs):
                             start = s * seg_len
                             end   = min(start + seg_len, n)
-                            if start >= n:
-                                break
-                            seg_xg_h = xg_h_list[end-1] - (xg_h_list[start] if start > 0 else 0)
-                            seg_xg_a = xg_a_list[end-1] - (xg_a_list[start] if start > 0 else 0)
+                            if start >= n: break
+                            seg_xg_h = xg_h_ser[end-1] - (xg_h_ser[start] if start > 0 else 0)
+                            seg_xg_a = xg_a_ser[end-1] - (xg_a_ser[start] if start > 0 else 0)
                             seg_min  = mins_list[start]
                             seg_max  = mins_list[end-1]
-
                             if seg_xg_h > seg_xg_a * 1.3:
-                                color = "#00d4aa"; icon = "▲"
-                                tip   = f"{home_name} натиска"
+                                color = "#00d4aa"; icon = "▲"; tip = f"{home_name} натиска"
                             elif seg_xg_a > seg_xg_h * 1.3:
-                                color = "#f59e0b"; icon = "▲"
-                                tip   = f"{away_name} натиска"
+                                color = "#f59e0b"; icon = "▲"; tip = f"{away_name} натиска"
                             else:
-                                color = "#4b5563"; icon = "▬"
-                                tip   = "Равностойно"
-
+                                color = "#4b5563"; icon = "▬"; tip = "Равностойно"
                             timeline_html += f"""
 <div style="flex:1;text-align:center;padding:.4rem .2rem;
             background:rgba(0,0,0,.2);border-radius:6px;
@@ -1188,7 +1208,6 @@ def live_tab_fragment():
   <div style="font-size:.6rem;color:#6b7280">{seg_min}′–{seg_max}′</div>
   <div style="font-size:.9rem;color:{color}">{icon}</div>
 </div>"""
-
                         timeline_html += "</div>"
                         timeline_html += f"""
 <div style="display:flex;gap:10px;margin-top:.4rem;font-size:.65rem;color:#6b7280">
@@ -1197,7 +1216,6 @@ def live_tab_fragment():
   <span style="color:#4b5563">▬ Равно</span>
 </div>"""
                         st.markdown(timeline_html, unsafe_allow_html=True)
-
 
             # ── Right: AI chat ────────────────────────────────────
             with ai_col:
