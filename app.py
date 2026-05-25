@@ -961,7 +961,7 @@ def live_tab_fragment():
     This fragment reruns every `_refresh_interval` seconds independently.
     The rest of the app (Програма, AI chat history) is NOT re-executed.
     """
-    from api import get_live_events
+    from api import get_live_events, get_event_stats
 
     # Drain WebSocket queue — get latest frames since last run
     new_frames = ws_mgr.drain()
