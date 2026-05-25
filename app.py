@@ -451,60 +451,70 @@ def render_bookmaker_odds(data: Dict, home_name: str, away_name: str):
     """Bookmaker-by-bookmaker odds comparison table."""
     import pandas as pd
 
-    # Try to extract list of bookmakers from various response shapes
-    books = (data.get("bookmakers") or data.get("results") or
-             data.get("odds") or [])
+    # Handle various API response shapes
+    if not data or not isinstance(data, dict):
+        return False   # signal: no data
+
+    # Try to extract list of bookmakers
+    books = None
+    for key in ("bookmakers", "results", "data"):
+        v = data.get(key)
+        if isinstance(v, list) and v:
+            books = v
+            break
+
+    # If no list found, the whole dict might be consensus odds — not bookmaker comparison
     if not books:
-        st.caption("Нема букмейкърски данни.")
-        return
+        return False
 
     rows = []
     for bk in books:
-        name = bk.get("bookmaker_name") or bk.get("name","?")
+        if not isinstance(bk, dict):
+            continue
+        name = bk.get("bookmaker_name") or bk.get("name") or bk.get("id","?")
         mw   = bk.get("match_winner") or bk.get("1x2") or {}
-        ou   = bk.get("over_under")   or {}
-        btts = bk.get("btts")         or {}
+        ou   = bk.get("over_under") or {}
+        btts = bk.get("btts") or {}
+        if not isinstance(mw,   dict): mw   = {}
+        if not isinstance(ou,   dict): ou   = {}
+        if not isinstance(btts, dict): btts = {}
         row = {
-            "Букмейкър": name,
+            "Букмейкър": str(name),
             "1":    mw.get("home"),
             "X":    mw.get("draw"),
             "2":    mw.get("away"),
-            "O2.5": ou.get("over_25"),
-            "U2.5": ou.get("under_25"),
+            "O2.5": ou.get("over_25") or ou.get("over"),
+            "U2.5": ou.get("under_25") or ou.get("under"),
             "GG":   btts.get("yes"),
             "NG":   btts.get("no"),
         }
-        if any(v for k,v in row.items() if k != "Букмейкър"):
+        if any(v for k, v in row.items() if k != "Букмейкър"):
             rows.append(row)
 
     if not rows:
-        st.caption("Нема букмейкърски данни.")
-        return
+        return False
 
     df = pd.DataFrame(rows).set_index("Букмейкър")
-    # Highlight best value per column
-    numeric_cols = [c for c in df.columns if c != "Букмейкър"]
-    df[numeric_cols] = df[numeric_cols].apply(
-        pd.to_numeric, errors="coerce")
+    numeric_cols = [c for c in df.columns]
+    df[numeric_cols] = df[numeric_cols].apply(pd.to_numeric, errors="coerce")
 
     def _highlight_max(s):
         is_max = s == s.max()
-        return ["background-color: rgba(0,212,170,0.15); color:#00d4aa; font-weight:700"
+        return ["background-color:rgba(0,212,170,0.15);color:#00d4aa;font-weight:700"
                 if v else "color:#e2e8f0" for v in is_max]
 
     styled = (df.style
               .apply(_highlight_max, subset=numeric_cols, axis=0)
               .format("{:.2f}", na_rep="–")
               .set_table_styles([
-                  {"selector":"th",
-                   "props":"background:#161b27;color:#6b7280;font-size:.75rem;padding:6px 10px"},
-                  {"selector":"td",
-                   "props":"background:#0d1117;font-size:.82rem;padding:5px 10px;border-bottom:1px solid #1e2737"},
+                  {"selector": "th",
+                   "props": "background:#161b27;color:#6b7280;font-size:.75rem;padding:6px 10px"},
+                  {"selector": "td",
+                   "props": "background:#0d1117;font-size:.82rem;padding:5px 10px;border-bottom:1px solid #1e2737"},
               ]))
     st.dataframe(styled, use_container_width=True)
-    st.caption("🟢 = найдобра стойност за колоната")
-
-
+    st.caption("🟢 = най-добра стойност за колоната")
+    return True
 # ═════════════════════════════════════════════════════════════════
 # MATCH DETAIL — called only after "Зареди" button
 # ═════════════════════════════════════════════════════════════════
@@ -541,6 +551,7 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
            f"home={home_name} away={away_name}{lineup_ctx}")
 
     if is_finished:
+        # FINISHED: Stats | Home | Away | H2H | Shotmap | Incidents | Odds | AI
         tabs = st.tabs(["📊 Статистики", f"🏠 {home_name[:13]}",
                         f"✈️ {away_name[:13]}", "⚔️ H2H",
                         "🎯 Удари", "📋 Инциденти",
@@ -548,9 +559,9 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
         off = 1
         with tabs[0]: render_event_stats_panel(eid, home_name, away_name)
     else:
+        # UPCOMING: Home | Away | H2H | Odds & Prediction | AI (no Shotmap/Incidents)
         tabs = st.tabs([f"🏠 {home_name[:13]}", f"✈️ {away_name[:13]}",
-                        "⚔️ H2H", "🎯 Удари", "📋 Инциденти",
-                        "💰 Прогноза & Коефициенти", "🤖 AI"])
+                        "⚔️ H2H", "💰 Прогноза & Коефициенти", "🤖 AI"])
         off = 0
 
     # ── Team form tabs ─────────────────────────────────────────────
@@ -605,55 +616,61 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
             st.markdown("")
             for hm in h2h_list: render_match_row(hm)
 
-    # ── Shotmap ───────────────────────────────────────────────────
-    with tabs[off + 3]:
-        if not eid:
-            st.caption("Няма event_id.")
-        else:
-            shots = get_event_shotmap(eid)
-            if not shots:
-                st.caption("Картата на ударите не е налична.")
-            else:
-                render_shotmap(shots, home_name, away_name)
+    if is_finished:
+        # ── Shotmap (finished only) ───────────────────────────────
+        with tabs[off + 3]:
+            shots = get_event_shotmap(eid) if eid else []
+            if shots: render_shotmap(shots, home_name, away_name)
+            else:     st.caption("Картата на ударите не е налична.")
 
-    # ── Incidents timeline ────────────────────────────────────────
-    with tabs[off + 4]:
-        if not eid:
-            st.caption("Няма event_id.")
-        else:
-            incidents = get_event_incidents(eid)
-            if not incidents:
-                st.caption("Инцидентите не са налични.")
-            else:
-                render_incidents(incidents, home_name, away_name)
+        # ── Incidents (finished only) ─────────────────────────────
+        with tabs[off + 4]:
+            incidents = get_event_incidents(eid) if eid else []
+            if incidents: render_incidents(incidents, home_name, away_name)
+            else:         st.caption("Инцидентите не са налични.")
 
-    # ── Odds / prediction / bookmaker comparison ──────────────────
-    with tabs[off + 5]:
+        odds_tab_idx = off + 5
+        ai_tab_idx   = off + 6
+    else:
+        odds_tab_idx = off + 3
+        ai_tab_idx   = off + 4
+
+    # ── Odds / Prediction tab ─────────────────────────────────────
+    with tabs[odds_tab_idx]:
+        has_content = False
         if eid:
-            # Bookmaker comparison
-            bk_odds = get_odds_comparison(eid)
-            if bk_odds:
-                render_bookmaker_odds(bk_odds, home_name, away_name)
-            else:
-                odds = get_event_odds(eid)
-                if odds: render_odds_row(odds)
+            # Try bookmaker comparison first
+            bk_data = get_odds_comparison(eid)
+            if bk_data:
+                has_content = render_bookmaker_odds(bk_data, home_name, away_name) or False
 
+            # Fall back to consensus odds
+            if not has_content:
+                odds = get_event_odds(eid)
+                if odds:
+                    render_odds_row(odds)
+                    has_content = True
+
+            # ML prediction for upcoming/live
             if not is_finished:
                 pred = get_prediction(eid)
                 if pred:
-                    st.markdown("**ML Прогноза**")
-                    pc1,pc2,pc3 = st.columns(3)
+                    st.markdown("---")
+                    st.markdown("**🤖 ML Прогноза**")
+                    pc1, pc2, pc3 = st.columns(3)
                     ph  = pred.get("home_win_pct")  or pred.get("home_probability")
                     pd_ = pred.get("draw_pct")       or pred.get("draw_probability")
                     pa  = pred.get("away_win_pct")  or pred.get("away_probability")
                     if ph:  pc1.metric("1", f"{float(ph):.0f}%")
                     if pd_: pc2.metric("X", f"{float(pd_):.0f}%")
                     if pa:  pc3.metric("2", f"{float(pa):.0f}%")
-            if not bk_odds and not get_event_odds(eid):
-                st.caption("Няма налични коефициенти.")
+                    has_content = True
+
+        if not has_content:
+            st.info("Коефициенти и прогноза не са налични за този мач.")
 
     # ── AI ────────────────────────────────────────────────────────
-    with tabs[off + 6]:
+    with tabs[ai_tab_idx]:
         tag = "fin" if is_finished else "up"
         render_inline_ai(m, f"ai_{tag}_{eid}", home_name, away_name,
                          event_id=eid, extra_ctx=ctx)
