@@ -909,49 +909,142 @@ def live_tab_fragment():
                     st.markdown("")
                     render_odds_row(ws_odds)
 
-                # ── xG Goal Meter ─────────────────────────────────
-                ser = ws_mgr.series.get(eid, {})
+                # ── Simple visual panels from WS series ───────────
+                ser       = ws_mgr.series.get(eid, {})
                 xg_h_list = ser.get("xg_home", [])
                 xg_a_list = ser.get("xg_away", [])
+                att_h_list = ser.get("att_home", [])
+                att_a_list = ser.get("att_away", [])
+
                 if xg_h_list and xg_a_list:
-                    xg_h_val = xg_h_list[-1]
-                    xg_a_val = xg_a_list[-1]
-                    total_xg  = xg_h_val + xg_a_val or 1
-                    pct_h     = int(xg_h_val / total_xg * 100)
-                    pct_a     = 100 - pct_h
-                    st.markdown(f"""
-                    <div style="margin:.6rem 0">
-                      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
-                        <span style="font-size:.7rem;color:#6b7280;font-weight:600">xG МЕТЪР</span>
-                        <span style="font-size:.7rem;color:#e2e8f0;font-weight:700">
-                          {xg_h_val:.2f} — {xg_a_val:.2f}
-                        </span>
-                      </div>
-                      <div style="display:flex;height:8px;border-radius:4px;overflow:hidden">
-                        <div style="width:{pct_h}%;background:linear-gradient(90deg,#00d4aa,#0ea5e9)"></div>
-                        <div style="width:{pct_a}%;background:linear-gradient(90deg,#f59e0b,#ef4444)"></div>
-                      </div>
-                    </div>""", unsafe_allow_html=True)
+                    xg_h_val  = xg_h_list[-1]
+                    xg_a_val  = xg_a_list[-1]
+                    att_h_val = att_h_list[-1] if att_h_list else 0
+                    att_a_val = att_a_list[-1] if att_a_list else 0
 
-                # ── Momentum & xG charts (from WS history) ────────
-                mins_list = ser.get("minutes", [])
-                if len(mins_list) >= 3:
-                    import pandas as pd
-                    st.markdown('<div class="sec-hd">📈 МОМЕНТ (Опасни атаки)</div>',
-                                unsafe_allow_html=True)
-                    att_df = pd.DataFrame({
-                        home_name: ser.get("att_home", []),
-                        away_name: ser.get("att_away", []),
-                    }, index=mins_list)
-                    st.line_chart(att_df, height=130, use_container_width=True)
+                    # ── Helper: simple two-sided bar ───────────────
+                    def _two_bar(lbl, h_val, a_val, h_color="#00d4aa", a_color="#f59e0b",
+                                 fmt=lambda x: str(int(x)),
+                                 tooltip=""):
+                        total = h_val + a_val or 1
+                        ph    = max(4, min(96, int(h_val / total * 100)))
+                        pa    = 100 - ph
+                        return f"""
+<div style="margin:.55rem 0" title="{tooltip}">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <span style="font-size:.95rem;font-weight:800;color:{h_color}">{fmt(h_val)}</span>
+    <span style="font-size:.65rem;color:#6b7280;text-transform:uppercase;
+                 letter-spacing:1px;text-align:center;flex:1;padding:0 6px">{lbl}</span>
+    <span style="font-size:.95rem;font-weight:800;color:{a_color}">{fmt(a_val)}</span>
+  </div>
+  <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px">
+    <div style="width:{ph}%;background:{h_color};border-radius:5px 0 0 5px;opacity:.85"></div>
+    <div style="width:{pa}%;background:{a_color};border-radius:0 5px 5px 0;opacity:.85"></div>
+  </div>
+</div>"""
 
-                    st.markdown('<div class="sec-hd">📊 xG ПРОГРЕСИЯ</div>',
-                                unsafe_allow_html=True)
-                    xg_df = pd.DataFrame({
-                        home_name: xg_h_list,
-                        away_name: xg_a_list,
-                    }, index=mins_list)
-                    st.line_chart(xg_df, height=130, use_container_width=True)
+                    # ── xG panel ──────────────────────────────────
+                    # Explain xG simply
+                    xg_label = "Качество на ударите (xG)"
+                    xg_tip   = ("xG = очаквани голове. По-голямото число означава "
+                                "по-опасни удари. 1.0 xG = трябва да е гол.")
+                    shots_h  = ser.get("shots_home", [])
+                    shots_a  = ser.get("shots_away", [])
+                    shots_h_val = shots_h[-1] if shots_h else 0
+                    shots_a_val = shots_a[-1] if shots_a else 0
+
+                    st.markdown(
+                        '<div class="sec-hd">⚽ КОЙ НАТИСКА?</div>',
+                        unsafe_allow_html=True)
+
+                    bars_html = ""
+                    bars_html += _two_bar(
+                        "Опасни атаки", att_h_val, att_a_val,
+                        tooltip="Колко пъти всеки отбор е заплашил вратата")
+                    bars_html += _two_bar(
+                        "Удари в рамка", shots_h_val, shots_a_val,
+                        tooltip="Удари, които вратарят е трябвало да спасява")
+                    bars_html += _two_bar(
+                        xg_label, xg_h_val, xg_a_val,
+                        fmt=lambda x: f"{x:.2f}",
+                        tooltip=xg_tip)
+
+                    # Who is dominating indicator
+                    if att_h_val + att_a_val > 0:
+                        dom_pct  = int(att_h_val / (att_h_val + att_a_val) * 100)
+                        dom_name = home_name if dom_pct >= 50 else away_name
+                        dom_val  = dom_pct if dom_pct >= 50 else 100 - dom_pct
+                        dom_color = "#00d4aa" if dom_pct >= 50 else "#f59e0b"
+                        bars_html += f"""
+<div style="margin-top:.7rem;padding:.6rem .8rem;
+            background:rgba(0,0,0,.2);border-radius:8px;
+            border-left:3px solid {dom_color}">
+  <span style="font-size:.72rem;color:#6b7280">Доминира: </span>
+  <span style="font-size:.9rem;font-weight:700;color:{dom_color}">{dom_name}</span>
+  <span style="font-size:.72rem;color:#6b7280"> ({dom_val}% от атаките)</span>
+</div>"""
+
+                    # Team name legend
+                    bars_html = f"""
+<div style="display:flex;justify-content:space-between;
+            margin-bottom:.5rem;font-size:.72rem;font-weight:700">
+  <span style="color:#00d4aa">🏠 {home_name}</span>
+  <span style="color:#f59e0b">✈️ {away_name}</span>
+</div>""" + bars_html
+
+                    st.markdown(bars_html, unsafe_allow_html=True)
+
+                    # ── xG trend: simple emoji timeline ───────────
+                    mins_list = ser.get("minutes", [])
+                    if len(mins_list) >= 4:
+                        st.markdown(
+                            '<div class="sec-hd" style="margin-top:.8rem">'
+                            '📈 КАК СЕ РАЗВИВА МАЧЪТ</div>',
+                            unsafe_allow_html=True)
+
+                        # Divide match into segments and show who led in each
+                        n       = len(mins_list)
+                        segs    = 6  # split into 6 segments
+                        seg_len = max(1, n // segs)
+                        timeline_html = '<div style="display:flex;gap:3px;margin-top:.3rem">'
+
+                        for s in range(segs):
+                            start = s * seg_len
+                            end   = min(start + seg_len, n)
+                            if start >= n:
+                                break
+                            seg_xg_h = xg_h_list[end-1] - (xg_h_list[start] if start > 0 else 0)
+                            seg_xg_a = xg_a_list[end-1] - (xg_a_list[start] if start > 0 else 0)
+                            seg_min  = mins_list[start]
+                            seg_max  = mins_list[end-1]
+
+                            if seg_xg_h > seg_xg_a * 1.3:
+                                color = "#00d4aa"; icon = "▲"
+                                tip   = f"{home_name} натиска"
+                            elif seg_xg_a > seg_xg_h * 1.3:
+                                color = "#f59e0b"; icon = "▲"
+                                tip   = f"{away_name} натиска"
+                            else:
+                                color = "#4b5563"; icon = "▬"
+                                tip   = "Равностойно"
+
+                            timeline_html += f"""
+<div style="flex:1;text-align:center;padding:.4rem .2rem;
+            background:rgba(0,0,0,.2);border-radius:6px;
+            border-bottom:3px solid {color}" title="{tip}">
+  <div style="font-size:.6rem;color:#6b7280">{seg_min}′–{seg_max}′</div>
+  <div style="font-size:.9rem;color:{color}">{icon}</div>
+</div>"""
+
+                        timeline_html += "</div>"
+                        timeline_html += f"""
+<div style="display:flex;gap:10px;margin-top:.4rem;font-size:.65rem;color:#6b7280">
+  <span style="color:#00d4aa">▲ {home_name}</span>
+  <span style="color:#f59e0b">▲ {away_name}</span>
+  <span style="color:#4b5563">▬ Равно</span>
+</div>"""
+                        st.markdown(timeline_html, unsafe_allow_html=True)
+
 
             # ── Right: AI chat ────────────────────────────────────
             with ai_col:
