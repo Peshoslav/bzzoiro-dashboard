@@ -321,31 +321,236 @@ def render_inline_ai(match_obj: Dict, chat_key: str,
         st.rerun()
 
 
+def render_shotmap(shots: list, home_name: str, away_name: str):
+    """SVG football pitch with shots plotted by xG."""
+    import html as _html
+
+    home_shots = [s for s in shots if s.get("is_home") or s.get("team","").lower() in home_name.lower()]
+    away_shots = [s for s in shots if not (s.get("is_home") or s.get("team","").lower() in home_name.lower())]
+
+    def _dot(s, flip=False):
+        x = float(s.get("player_coordinates_x") or s.get("x") or 50)
+        y = float(s.get("player_coordinates_y") or s.get("y") or 50)
+        if flip: x, y = 100-x, 100-y
+        xg  = float(s.get("xg") or s.get("expected_goals") or 0)
+        r   = max(5, min(18, int(xg * 40)))
+        goal = str(s.get("shot_type","") or s.get("outcome","")).lower() in ("goal","scored")
+        color = "#22c55e" if goal else ("#00d4aa" if not flip else "#f59e0b")
+        stroke = "#fff" if goal else "none"
+        sw = 2 if goal else 0
+        tip = f"{s.get('player_name','?')} xG:{xg:.2f}"
+        # Scale to SVG 700×460 pitch (attacking = right side)
+        sx = int(x / 100 * 700)
+        sy = int(y / 100 * 460)
+        return (f'<circle cx="{sx}" cy="{sy}" r="{r}" '
+                f'fill="{color}" fill-opacity="0.75" '
+                f'stroke="{stroke}" stroke-width="{sw}">'
+                f'<title>{_html.escape(tip)}</title></circle>')
+
+    home_dots = "".join(_dot(s) for s in home_shots)
+    away_dots = "".join(_dot(s, flip=True) for s in away_shots)
+
+    home_xg = sum(float(s.get("xg") or s.get("expected_goals") or 0) for s in home_shots)
+    away_xg = sum(float(s.get("xg") or s.get("expected_goals") or 0) for s in away_shots)
+
+    svg = f"""
+    <svg viewBox="0 0 700 460" xmlns="http://www.w3.org/2000/svg"
+         style="width:100%;max-width:700px;background:#1a2a1a;border-radius:10px;display:block;margin:0 auto">
+      <!-- pitch outline -->
+      <rect x="20" y="20" width="660" height="420" fill="none" stroke="#2d5a27" stroke-width="2"/>
+      <!-- halfway line -->
+      <line x1="350" y1="20" x2="350" y2="440" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- centre circle -->
+      <circle cx="350" cy="230" r="60" fill="none" stroke="#2d5a27" stroke-width="1.5"/>
+      <circle cx="350" cy="230" r="3" fill="#2d5a27"/>
+      <!-- left penalty area -->
+      <rect x="20" y="130" width="132" height="200" fill="none" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- left 6-yard box -->
+      <rect x="20" y="185" width="44" height="90" fill="none" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- left goal -->
+      <rect x="8" y="200" width="12" height="60" fill="#1e3a1e" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- right penalty area -->
+      <rect x="548" y="130" width="132" height="200" fill="none" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- right 6-yard box -->
+      <rect x="636" y="185" width="44" height="90" fill="none" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- right goal -->
+      <rect x="680" y="200" width="12" height="60" fill="#1e3a1e" stroke="#2d5a27" stroke-width="1.5"/>
+      <!-- shots -->
+      {home_dots}{away_dots}
+      <!-- legend -->
+      <circle cx="40" cy="453" r="6" fill="#22c55e" fill-opacity=".8"/>
+      <text x="50" y="457" fill="#9ca3af" font-size="11" font-family="Inter,sans-serif">Гол</text>
+      <circle cx="90" cy="453" r="6" fill="#00d4aa" fill-opacity=".8"/>
+      <text x="100" y="457" fill="#9ca3af" font-size="11" font-family="Inter,sans-serif">{home_name[:15]}</text>
+      <circle cx="200" cy="453" r="6" fill="#f59e0b" fill-opacity=".8"/>
+      <text x="210" y="457" fill="#9ca3af" font-size="11" font-family="Inter,sans-serif">{away_name[:15]}</text>
+    </svg>"""
+
+    col1, col2 = st.columns(2)
+    col1.markdown(f'<div class="tile"><div class="tile-val">{home_xg:.2f}</div>'
+                  f'<div class="tile-lbl">{home_name[:15]} xG</div></div>',
+                  unsafe_allow_html=True)
+    col2.markdown(f'<div class="tile"><div class="tile-val">{away_xg:.2f}</div>'
+                  f'<div class="tile-lbl">{away_name[:15]} xG</div></div>',
+                  unsafe_allow_html=True)
+    st.markdown(svg, unsafe_allow_html=True)
+    st.caption(f"⚪ Размерът на точката = xG стойност  ·  Зелено = гол  "
+               f"·  {len(home_shots)} удара vs {len(away_shots)} удара")
+
+
+def render_incidents(incidents: list, home_name: str, away_name: str):
+    """Chronological match timeline: goals, cards, subs."""
+    icons = {
+        "goal":         "⚽", "own_goal":       "⚽🔴",
+        "yellow_card":  "🟨", "yellow_red_card":"🟧",
+        "red_card":     "🟥", "substitution":   "🔄",
+        "var":          "📺", "penalty":        "🎯",
+        "missed_penalty": "❌",
+    }
+    sorted_inc = sorted(incidents, key=lambda x: float(x.get("time") or x.get("minute") or 0))
+    rows = []
+    for inc in sorted_inc:
+        t     = inc.get("time") or inc.get("minute") or "?"
+        itype = (inc.get("incident_type") or inc.get("type") or "").lower().replace(" ","_")
+        icon  = icons.get(itype, "•")
+        player = inc.get("player_name") or inc.get("player","")
+        team   = inc.get("team","")
+        is_home = (team.lower() in home_name.lower()
+                   if team else inc.get("is_home", True))
+        desc = inc.get("description") or inc.get("text") or itype.replace("_"," ").title()
+
+        if is_home:
+            rows.append(f"""
+            <div style="display:flex;align-items:center;gap:.5rem;margin:.25rem 0">
+              <span style="min-width:35px;font-size:.75rem;color:#6b7280;font-weight:600">{t}′</span>
+              <span style="font-size:1.1rem">{icon}</span>
+              <span style="font-size:.85rem;color:#e2e8f0"><b>{player}</b> <span style="color:#6b7280">{desc}</span></span>
+              <span style="flex:1"></span>
+            </div>""")
+        else:
+            rows.append(f"""
+            <div style="display:flex;align-items:center;gap:.5rem;margin:.25rem 0">
+              <span style="min-width:35px;font-size:.75rem;color:#6b7280;font-weight:600">{t}′</span>
+              <span style="flex:1"></span>
+              <span style="font-size:.85rem;color:#e2e8f0;text-align:right"><span style="color:#6b7280">{desc}</span> <b>{player}</b></span>
+              <span style="font-size:1.1rem">{icon}</span>
+            </div>""")
+
+    if not rows:
+        st.caption("Няма инциденти.")
+        return
+
+    header = (f'<div style="display:flex;justify-content:space-between;'
+              f'font-size:.72rem;font-weight:700;color:#4b5563;'
+              f'text-transform:uppercase;letter-spacing:1px;margin-bottom:.5rem">'
+              f'<span>{home_name}</span><span>{away_name}</span></div>')
+    st.markdown(header + "".join(rows), unsafe_allow_html=True)
+
+
+def render_bookmaker_odds(data: Dict, home_name: str, away_name: str):
+    """Bookmaker-by-bookmaker odds comparison table."""
+    import pandas as pd
+
+    # Try to extract list of bookmakers from various response shapes
+    books = (data.get("bookmakers") or data.get("results") or
+             data.get("odds") or [])
+    if not books:
+        st.caption("Нема букмейкърски данни.")
+        return
+
+    rows = []
+    for bk in books:
+        name = bk.get("bookmaker_name") or bk.get("name","?")
+        mw   = bk.get("match_winner") or bk.get("1x2") or {}
+        ou   = bk.get("over_under")   or {}
+        btts = bk.get("btts")         or {}
+        row = {
+            "Букмейкър": name,
+            "1":    mw.get("home"),
+            "X":    mw.get("draw"),
+            "2":    mw.get("away"),
+            "O2.5": ou.get("over_25"),
+            "U2.5": ou.get("under_25"),
+            "GG":   btts.get("yes"),
+            "NG":   btts.get("no"),
+        }
+        if any(v for k,v in row.items() if k != "Букмейкър"):
+            rows.append(row)
+
+    if not rows:
+        st.caption("Нема букмейкърски данни.")
+        return
+
+    df = pd.DataFrame(rows).set_index("Букмейкър")
+    # Highlight best value per column
+    numeric_cols = [c for c in df.columns if c != "Букмейкър"]
+    df[numeric_cols] = df[numeric_cols].apply(
+        pd.to_numeric, errors="coerce")
+
+    def _highlight_max(s):
+        is_max = s == s.max()
+        return ["background-color: rgba(0,212,170,0.15); color:#00d4aa; font-weight:700"
+                if v else "color:#e2e8f0" for v in is_max]
+
+    styled = (df.style
+              .apply(_highlight_max, subset=numeric_cols, axis=0)
+              .format("{:.2f}", na_rep="–")
+              .set_table_styles([
+                  {"selector":"th",
+                   "props":"background:#161b27;color:#6b7280;font-size:.75rem;padding:6px 10px"},
+                  {"selector":"td",
+                   "props":"background:#0d1117;font-size:.82rem;padding:5px 10px;border-bottom:1px solid #1e2737"},
+              ]))
+    st.dataframe(styled, use_container_width=True)
+    st.caption("🟢 = найдобра стойност за колоната")
+
+
 # ═════════════════════════════════════════════════════════════════
 # MATCH DETAIL — called only after "Зареди" button
 # ═════════════════════════════════════════════════════════════════
 def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
                         home_id, away_id, is_finished: bool):
     from api import (get_event_stats, get_event_odds, get_prediction,
-                     get_team_fixtures, get_h2h)
+                     get_team_fixtures, get_h2h, get_event_incidents,
+                     get_event_shotmap, get_event_lineups, get_odds_comparison)
 
     # Per-match slider for number of recent fixtures
     n_last = st.slider("Последни мачове за форма", 3, 15, 5,
                        key=f"nlast_{eid}")
 
-    # Quick AI context string (no blocking calls — reuse cached data)
+    # ── Build AI context (lineups for AI only, not shown in UI) ───
+    lineup_ctx = ""
+    if eid:
+        lu = get_event_lineups(eid)
+        if lu:
+            def _fmt_lineup(side_data):
+                if not side_data: return "—"
+                players = side_data.get("players") or side_data.get("lineup") or []
+                if isinstance(players, list):
+                    starters = [p.get("name","?") for p in players
+                                if p.get("type","").lower() in ("starter","playing","")
+                                or p.get("starter", True)]
+                    return ", ".join(starters[:11]) if starters else "—"
+                return "—"
+            h_lu = lu.get("home") or lu.get("homeTeam") or {}
+            a_lu = lu.get("away") or lu.get("awayTeam") or {}
+            lineup_ctx = (f"\nЛИНКЪП {home_name}: {_fmt_lineup(h_lu)}"
+                          f"\nЛИНКЪП {away_name}: {_fmt_lineup(a_lu)}")
+
     ctx = (f"home_id={home_id} away_id={away_id} event_id={eid} "
-           f"home={home_name} away={away_name}")
+           f"home={home_name} away={away_name}{lineup_ctx}")
 
     if is_finished:
-        tabs = st.tabs(["📊 Статистики", f"🏠 {home_name[:14]}",
-                        f"✈️ {away_name[:14]}", "⚔️ H2H",
+        tabs = st.tabs(["📊 Статистики", f"🏠 {home_name[:13]}",
+                        f"✈️ {away_name[:13]}", "⚔️ H2H",
+                        "🎯 Удари", "📋 Инциденти",
                         "💰 Коефициенти", "🤖 AI"])
         off = 1
         with tabs[0]: render_event_stats_panel(eid, home_name, away_name)
     else:
-        tabs = st.tabs([f"🏠 {home_name[:14]}", f"✈️ {away_name[:14]}",
-                        "⚔️ H2H", "💰 Прогноза & Коефициенти", "🤖 AI"])
+        tabs = st.tabs([f"🏠 {home_name[:13]}", f"✈️ {away_name[:13]}",
+                        "⚔️ H2H", "🎯 Удари", "📋 Инциденти",
+                        "💰 Прогноза & Коефициенти", "🤖 AI"])
         off = 0
 
     # ── Team form tabs ─────────────────────────────────────────────
@@ -400,11 +605,39 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
             st.markdown("")
             for hm in h2h_list: render_match_row(hm)
 
-    # ── Odds / prediction ──────────────────────────────────────────
+    # ── Shotmap ───────────────────────────────────────────────────
     with tabs[off + 3]:
+        if not eid:
+            st.caption("Няма event_id.")
+        else:
+            shots = get_event_shotmap(eid)
+            if not shots:
+                st.caption("Картата на ударите не е налична.")
+            else:
+                render_shotmap(shots, home_name, away_name)
+
+    # ── Incidents timeline ────────────────────────────────────────
+    with tabs[off + 4]:
+        if not eid:
+            st.caption("Няма event_id.")
+        else:
+            incidents = get_event_incidents(eid)
+            if not incidents:
+                st.caption("Инцидентите не са налични.")
+            else:
+                render_incidents(incidents, home_name, away_name)
+
+    # ── Odds / prediction / bookmaker comparison ──────────────────
+    with tabs[off + 5]:
         if eid:
-            odds = get_event_odds(eid)
-            if odds: render_odds_row(odds)
+            # Bookmaker comparison
+            bk_odds = get_odds_comparison(eid)
+            if bk_odds:
+                render_bookmaker_odds(bk_odds, home_name, away_name)
+            else:
+                odds = get_event_odds(eid)
+                if odds: render_odds_row(odds)
+
             if not is_finished:
                 pred = get_prediction(eid)
                 if pred:
@@ -416,10 +649,11 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
                     if ph:  pc1.metric("1", f"{float(ph):.0f}%")
                     if pd_: pc2.metric("X", f"{float(pd_):.0f}%")
                     if pa:  pc3.metric("2", f"{float(pa):.0f}%")
-            if not odds: st.caption("Няма налични коефициенти.")
+            if not bk_odds and not get_event_odds(eid):
+                st.caption("Няма налични коефициенти.")
 
     # ── AI ────────────────────────────────────────────────────────
-    with tabs[off + 4]:
+    with tabs[off + 6]:
         tag = "fin" if is_finished else "up"
         render_inline_ai(m, f"ai_{tag}_{eid}", home_name, away_name,
                          event_id=eid, extra_ctx=ctx)
@@ -658,6 +892,50 @@ def live_tab_fragment():
                     st.markdown("")
                     render_odds_row(ws_odds)
 
+                # ── xG Goal Meter ─────────────────────────────────
+                ser = ws_mgr.series.get(eid, {})
+                xg_h_list = ser.get("xg_home", [])
+                xg_a_list = ser.get("xg_away", [])
+                if xg_h_list and xg_a_list:
+                    xg_h_val = xg_h_list[-1]
+                    xg_a_val = xg_a_list[-1]
+                    total_xg  = xg_h_val + xg_a_val or 1
+                    pct_h     = int(xg_h_val / total_xg * 100)
+                    pct_a     = 100 - pct_h
+                    st.markdown(f"""
+                    <div style="margin:.6rem 0">
+                      <div style="display:flex;justify-content:space-between;margin-bottom:3px">
+                        <span style="font-size:.7rem;color:#6b7280;font-weight:600">xG МЕТЪР</span>
+                        <span style="font-size:.7rem;color:#e2e8f0;font-weight:700">
+                          {xg_h_val:.2f} — {xg_a_val:.2f}
+                        </span>
+                      </div>
+                      <div style="display:flex;height:8px;border-radius:4px;overflow:hidden">
+                        <div style="width:{pct_h}%;background:linear-gradient(90deg,#00d4aa,#0ea5e9)"></div>
+                        <div style="width:{pct_a}%;background:linear-gradient(90deg,#f59e0b,#ef4444)"></div>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                # ── Momentum & xG charts (from WS history) ────────
+                mins_list = ser.get("minutes", [])
+                if len(mins_list) >= 3:
+                    import pandas as pd
+                    st.markdown('<div class="sec-hd">📈 МОМЕНТ (Опасни атаки)</div>',
+                                unsafe_allow_html=True)
+                    att_df = pd.DataFrame({
+                        home_name: ser.get("att_home", []),
+                        away_name: ser.get("att_away", []),
+                    }, index=mins_list)
+                    st.line_chart(att_df, height=130, use_container_width=True)
+
+                    st.markdown('<div class="sec-hd">📊 xG ПРОГРЕСИЯ</div>',
+                                unsafe_allow_html=True)
+                    xg_df = pd.DataFrame({
+                        home_name: xg_h_list,
+                        away_name: xg_a_list,
+                    }, index=mins_list)
+                    st.line_chart(xg_df, height=130, use_container_width=True)
+
             # ── Right: AI chat ────────────────────────────────────
             with ai_col:
                 # Build live context for Gemini from latest WS snapshot
@@ -691,8 +969,11 @@ def live_tab_fragment():
                 st.markdown(
                     f'<div class="sec-hd">🤖 AI — {home_name} vs {away_name}</div>',
                     unsafe_allow_html=True)
+
+                # Full WS history context for AI
+                ws_ai_ctx = ws_mgr.get_ai_context(eid, home_name, away_name)
                 render_inline_ai(lev, f"ai_live_{eid}", home_name, away_name,
-                                 event_id=eid, extra_ctx=live_ctx)
+                                 event_id=eid, extra_ctx=ws_ai_ctx)
 
 
 # Run the fragment inside the tab
