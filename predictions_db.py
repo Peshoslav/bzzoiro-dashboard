@@ -151,15 +151,27 @@ def update_result(event_id: int, target_date: str,
                   home_goals: int, away_goals: int) -> bool:
     """
     Record the actual result and compute accuracy vs prediction.
-    Called automatically when a predicted match finishes.
+    Searches target_date first, then all other dates as fallback
+    (in case the match was saved on a different calendar day).
     """
     data  = _load_raw()
-    day   = data.get(target_date, {})
     eid_s = str(event_id)
-    if eid_s not in day:
-        return False
 
-    entry = day[eid_s]
+    # Find which date this event was saved under
+    found_date = None
+    if eid_s in data.get(target_date, {}):
+        found_date = target_date
+    else:
+        # Search all dates — match might have been saved on a different day
+        for d, day_data in data.items():
+            if eid_s in day_data:
+                found_date = d
+                break
+
+    if not found_date:
+        return False   # never saved a prediction for this match
+
+    entry = data[found_date][eid_s]
     if entry.get("result"):
         return True   # already recorded
 
