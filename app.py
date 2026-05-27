@@ -271,22 +271,53 @@ def render_prediction_panel(home_name: str, away_name: str,
     if p["warning"]:
         st.warning(p["warning"])
 
-    # ── Confidence bar ────────────────────────────────────────────
+    # ── Confidence breakdown (3 components) ──────────────────────
     conf       = p["confidence"]
-    conf_color = "#22c55e" if conf >= 70 else "#f59e0b" if conf >= 40 else "#ef4444"
+    d_conf     = p.get("data_confidence",  0)
+    m_conf     = p.get("model_confidence", 0)
+    h2h_align  = p.get("h2h_alignment",    0)
+    conf_label = p.get("conf_label", "—")
+    conf_color = "#22c55e" if conf>=75 else "#f59e0b" if conf>=55 else "#ef4444" if conf>=35 else "#6b7280"
+
+    align_str  = ("✅ Съгласуване" if h2h_align > 0.2 else
+                  "❌ Разминаване" if h2h_align < -0.1 else
+                  "➖ Неутрален")
+    align_color= "#22c55e" if h2h_align>0.2 else "#ef4444" if h2h_align<-0.1 else "#6b7280"
+
     st.markdown(f"""
-    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.8rem">
-      <span style="font-size:.7rem;color:#6b7280;min-width:80px">Надеждност</span>
-      <div style="flex:1;background:#1e2737;border-radius:4px;height:7px">
-        <div style="width:{conf}%;background:{conf_color};
-                    border-radius:4px;height:100%"></div>
+    <div style="background:#0d1117;border:1px solid #1e2737;border-radius:10px;
+                padding:.8rem 1rem;margin-bottom:1rem">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">
+        <span style="font-size:.75rem;font-weight:700;color:#9ca3af">
+          СИГУРНОСТ НА ПРОГНОЗАТА
+        </span>
+        <span style="font-size:1.1rem;font-weight:900;color:{conf_color}">
+          {conf}% &nbsp;<span style="font-size:.75rem;font-weight:600">{conf_label}</span>
+        </span>
       </div>
-      <span style="font-size:.75rem;font-weight:700;color:{conf_color}">{conf}%</span>
-    </div>
-    <div style="font-size:.65rem;color:#4b5563;margin-bottom:1rem">
-      Базирано на {p['home_matches_used']} мача ({home_name}) и
-      {p['away_matches_used']} мача ({away_name})
-      {f"+ {len(h2h_matches)} H2H" if h2h_matches else ""}
+      <div style="height:8px;background:#1e2737;border-radius:4px;margin-bottom:.7rem">
+        <div style="width:{conf}%;height:100%;border-radius:4px;
+                    background:linear-gradient(90deg,{conf_color}88,{conf_color})"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem">
+        <div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">
+          <div style="font-size:.6rem;color:#6b7280">📊 Данни</div>
+          <div style="font-size:.85rem;font-weight:700;color:#0ea5e9">{d_conf}%</div>
+          <div style="font-size:.6rem;color:#4b5563">
+            {p['home_matches_used']}+{p['away_matches_used']} мача
+          </div>
+        </div>
+        <div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">
+          <div style="font-size:.6rem;color:#6b7280">🎯 Категоричност</div>
+          <div style="font-size:.85rem;font-weight:700;color:#a78bfa">{m_conf}%</div>
+          <div style="font-size:.6rem;color:#4b5563">концентрация на вероятности</div>
+        </div>
+        <div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">
+          <div style="font-size:.6rem;color:#6b7280">⚔️ H2H</div>
+          <div style="font-size:.75rem;font-weight:700;color:{align_color}">{align_str}</div>
+          <div style="font-size:.6rem;color:#4b5563">{p.get('h2h_used',0)} мача H2H</div>
+        </div>
+      </div>
     </div>""", unsafe_allow_html=True)
 
     # ── Win probability big display ───────────────────────────────
@@ -659,6 +690,42 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
     n_last = st.slider("Последни мачове за форма", 3, 15, 5,
                        key=f"nlast_{eid}")
 
+    # ── Match Importance ──────────────────────────────────────────
+    try:
+        from match_importance import get_match_importance
+        league_name = _league(m)
+        league_id_mi = None
+        for lg in get_leagues():
+            if league_name.lower() in (lg.get("name") or "").lower():
+                league_id_mi = lg.get("id"); break
+        imp = get_match_importance(league_name, league_id_mi,
+                                   home_name, away_name, home_id, away_id)
+        if imp.get("available"):
+            ic1, ic2 = st.columns(2)
+            for col, prefix, tname in [(ic1,"home",home_name),(ic2,"away",away_name)]:
+                sc  = imp[f"{prefix}_score"]
+                lbl = imp[f"{prefix}_label"]
+                emj = imp[f"{prefix}_emoji"]
+                bar_color = ("#ef4444" if sc >= 75 else
+                             "#f59e0b" if sc >= 45 else "#4b5563")
+                col.markdown(
+                    f'<div style="background:#161b27;border:1px solid #1e2737;'
+                    f'border-radius:8px;padding:.6rem .8rem;margin-bottom:.4rem">'
+                    f'<div style="font-size:.65rem;color:#6b7280;margin-bottom:3px">'
+                    f'{emj} {tname[:18]} — Важност</div>'
+                    f'<div style="display:flex;align-items:center;gap:.4rem">'
+                    f'<div style="flex:1;background:#1e2737;border-radius:3px;height:6px">'
+                    f'<div style="width:{sc}%;background:{bar_color};'
+                    f'border-radius:3px;height:100%"></div></div>'
+                    f'<span style="font-size:.8rem;font-weight:700;color:{bar_color}">'
+                    f'{sc}</span></div>'
+                    f'<div style="font-size:.7rem;color:{bar_color};margin-top:2px">'
+                    f'{lbl}</div></div>',
+                    unsafe_allow_html=True)
+    except Exception:
+        pass
+
+
     # ── Build AI context (lineups for AI only, not shown in UI) ───
     lineup_ctx = ""
     if eid:
@@ -844,7 +911,8 @@ st.markdown(f"""<div class="topbar">
   <div style="font-size:.8rem;color:#6b7280">{ws_mgr.status} &nbsp;|&nbsp; 🕐 BG (UTC+3)</div>
 </div>""", unsafe_allow_html=True)
 
-tab_schedule, tab_live = st.tabs(["📅 Програма", "🔴 На Живо"])
+tab_schedule, tab_live, tab_results = st.tabs(
+    ["📅 Програма", "🔴 На Живо", "📊 Резултати от прогнози"])
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -932,7 +1000,42 @@ with tab_schedule:
                         )
 
 
-# ═════════════════════════════════════════════════════════════════
+# ── Auto-record today's predictions (runs inside Tab 1 context) ──
+# We silently record Dixon-Coles predictions for all upcoming matches
+# so Tab 3 has data to work with at end of day.
+with tab_schedule:
+    try:
+        from predictions_db import record_prediction
+        from predictor import predict_match
+        _today_str = date.today().isoformat()
+        _upcoming = [m for m in events
+                     if _status(m) not in
+                     ("finished","ft","aet","pen_finished","ended","complete",
+                      "inprogress","live","1h","2h","ht","et","pen")]
+        for _m in _upcoming[:20]:   # cap at 20 to avoid hammering API
+            _eid  = _m.get("id")
+            if not _eid: continue
+            _ho   = _team(_m.get("home_team") or _m.get("home"))
+            _ao   = _team(_m.get("away_team") or _m.get("away"))
+            _hn   = _ho.get("name","?")
+            _an   = _ao.get("name","?")
+            _hid  = _ho.get("id"); _aid = _ao.get("id")
+            try:
+                _hfx = get_team_fixtures(team_id=_hid, team_name=_hn, last_n=15)
+                _afx = get_team_fixtures(team_id=_aid, team_name=_an, last_n=15)
+                _h2h = get_h2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
+                _pred = predict_match(_hn, _an, _hfx, _afx, _h2h)
+                record_prediction(
+                    event_id=_eid, home_name=_hn, away_name=_an,
+                    league=_league(_m), kickoff_bg=_kickoff(_m),
+                    pred=_pred, match_date=_today_str,
+                )
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 # ═════════════════════════════════════════════════════════════════
 # TAB 2 — НА ЖИВО
 # Uses @st.fragment(run_every=N) — only THIS section reruns,
@@ -1260,3 +1363,324 @@ def live_tab_fragment():
 # Run the fragment inside the tab
 with tab_live:
     live_tab_fragment()
+
+
+# ═════════════════════════════════════════════════════════════════
+# TAB 3 — РЕЗУЛТАТИ ОТ ПРОГНОЗИ
+# ═════════════════════════════════════════════════════════════════
+with tab_results:
+    from predictions_db import (
+        is_configured, save_prediction, update_result,
+        load_predictions_for_date, load_predictions_range,
+        compute_stats,
+    )
+    from api import get_events as _get_events
+
+    # ── Setup check ───────────────────────────────────────────────
+    if not is_configured():
+        st.markdown('''
+<div style="background:#161b27;border:1px solid #1e2737;border-radius:12px;padding:1.5rem">
+  <div style="font-size:1rem;font-weight:700;color:#e2e8f0;margin-bottom:.8rem">
+    🔧 Нужна е настройка за съхранение на прогнози
+  </div>
+  <div style="font-size:.85rem;color:#9ca3af;line-height:1.8">
+    <b>Стъпка 1:</b> Отиди на github.com → Settings → Developer Settings →
+    Personal Access Tokens → New token → отбележи scope: <code>gist</code><br>
+    <b>Стъпка 2:</b> Създай нов Secret Gist на gist.github.com с файл
+    <code>predictions.json</code> и съдържание <code>{}</code><br>
+    <b>Стъпка 3:</b> Добави в Streamlit Secrets:
+  </div>
+</div>''', unsafe_allow_html=True)
+        st.code('''GITHUB_TOKEN = "ghp_xxxxxxxxxxxx"   # токен с gist scope
+GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
+        st.stop()
+
+    today_str = date.today().isoformat()
+
+    # ── Auto-save today's predictions ────────────────────────────
+    # Silently save predictions for all upcoming/live matches today
+    _auto_events = _get_events(date_from=today_str, date_to=today_str, limit=100)
+    _saved_count = 0
+    for _ev in _auto_events:
+        _eid = _ev.get("id")
+        if not _eid: continue
+        _st = (_ev.get("status","") or "").lower()
+        if _st in ("finished","ft","ended","complete"): continue
+        _ho = _team(_ev.get("home_team") or _ev.get("home"))
+        _ao = _team(_ev.get("away_team") or _ev.get("away"))
+        _hn = _ho.get("name","?"); _an = _ao.get("name","?")
+        _hid = _ho.get("id");     _aid = _ao.get("id")
+        _lg = _league(_ev)
+        _ko = _kickoff(_ev)
+        try:
+            from predictor import predict_match
+            from api import get_team_fixtures, get_h2h
+            _hfx = get_team_fixtures(team_id=_hid, team_name=_hn, last_n=15)
+            _afx = get_team_fixtures(team_id=_aid, team_name=_an, last_n=15)
+            _h2h = get_h2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
+            _pred = predict_match(_hn, _an, _hfx, _afx, _h2h)
+            ok = save_prediction(_eid, _hn, _an, _lg, _ko, _pred)
+            if ok: _saved_count += 1
+        except Exception:
+            pass
+
+    # ── Auto-update results for finished matches ──────────────────
+    _updated = 0
+    for _ev in _auto_events:
+        _eid = _ev.get("id")
+        if not _eid: continue
+        _st = (_ev.get("status","") or "").lower()
+        if _st not in ("finished","ft","ended","complete","aet","pen_finished"):
+            continue
+        _sh, _sa = _score(_ev)
+        try:
+            ok = update_result(_eid, today_str, int(_sh), int(_sa))
+            if ok: _updated += 1
+        except Exception:
+            pass
+    if _updated:
+        st.toast(f"✅ Обновени {_updated} прогнози с реални резултати")
+
+    # ── Filters ───────────────────────────────────────────────────
+    st.markdown('<div class="sec-hd">Филтри</div>', unsafe_allow_html=True)
+    fc1, fc2, fc3, fc4 = st.columns([1.5, 1.5, 1.5, 1])
+    with fc1:
+        view_mode = st.radio("Период", ["Днес","Последни 7 дни",
+                                         "Последни 30 дни","Всички"],
+                             horizontal=True)
+    with fc2:
+        min_conf = st.slider("Минимална сигурност (%)", 0, 90, 0, step=5,
+                             help="Изключва прогнози с по-ниска сигурност от избраната")
+    with fc3:
+        show_only = st.selectbox("Покажи", ["Всички","Само проверени","Само чакащи"])
+    with fc4:
+        st.markdown("")
+        export_btn = st.button("⬇️ Изтегли CSV")
+
+    # ── Load data ─────────────────────────────────────────────────
+    days_map = {"Днес":0,"Последни 7 дни":7,"Последни 30 дни":30,"Всички":365}
+    days_back = days_map[view_mode]
+    if days_back == 0:
+        all_preds = load_predictions_for_date(today_str)
+        for p in all_preds: p.setdefault("date", today_str)
+    else:
+        all_preds = load_predictions_range(days_back)
+
+    # Filter by confidence
+    preds = [p for p in all_preds
+             if (p.get("prediction",{}).get("confidence") or 0) >= min_conf]
+
+    # Filter finished/pending
+    if show_only == "Само проверени":
+        preds = [p for p in preds if p.get("result")]
+    elif show_only == "Само чакащи":
+        preds = [p for p in preds if not p.get("result")]
+
+    # ── Stats summary ─────────────────────────────────────────────
+    stats = compute_stats(preds, min_confidence=min_conf)
+    if stats["n"] > 0:
+        st.markdown('<div class="sec-hd">📈 Обща точност</div>',
+                    unsafe_allow_html=True)
+        m1,m2,m3,m4,m5 = st.columns(5)
+        metrics = [
+            (m1, f"{stats['outcome_pct']}%",  f"1X2 точни ({stats['n']} мача)"),
+            (m2, f"{stats['btts_pct']}%",     "BTTS точни"),
+            (m3, f"{stats['over25_pct']}%",   "О2.5 точни"),
+            (m4, f"{stats['scoreline_pct']}%","Точен резултат"),
+            (m5, f"{stats.get('avg_xg_error') or '—'}","Средна xG грешка"),
+        ]
+        for col, val, lbl in metrics:
+            col.markdown(f'<div class="tile"><div class="tile-val">{val}</div>'
+                         f'<div class="tile-lbl">{lbl}</div></div>',
+                         unsafe_allow_html=True)
+        st.markdown("")
+
+        # Confidence breakdown
+        conf_bands = [(75,100,"Висока","#22c55e"),
+                      (55,74, "Умерена","#f59e0b"),
+                      (35,54, "Ниска","#ef4444"),
+                      (0, 34, "Много ниска","#6b7280")]
+        band_rows = []
+        for lo,hi,lbl,col in conf_bands:
+            band_preds = [p for p in preds
+                          if lo <= (p.get("prediction",{}).get("confidence") or 0) <= hi]
+            bs = compute_stats(band_preds)
+            if bs["n"] > 0:
+                band_rows.append((lbl, col, bs["n"], bs.get("outcome_pct","—")))
+        if band_rows:
+            st.markdown('<div class="sec-hd">Точност по сигурност</div>',
+                        unsafe_allow_html=True)
+            bcols = st.columns(len(band_rows))
+            for col,(lbl,color,n,pct) in zip(bcols, band_rows):
+                col.markdown(
+                    f'<div class="tile" style="border-color:{color}30">'+
+                    f'<div class="tile-val" style="color:{color}">{pct}%</div>'+
+                    f'<div class="tile-lbl">{lbl} ({n})</div></div>',
+                    unsafe_allow_html=True)
+            st.markdown("")
+
+    # ── CSV export ────────────────────────────────────────────────
+    if export_btn and preds:
+        import csv, io
+        buf = io.StringIO()
+        fieldnames = ["date","home","away","league","kickoff_bg",
+                      "confidence","conf_label","home_win","draw","away_win",
+                      "home_xg","away_xg","btts","over25",
+                      "result_home","result_away","outcome_correct",
+                      "btts_correct","over25_correct"]
+        w = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
+        w.writeheader()
+        for p in preds:
+            pr = p.get("prediction",{}); res = p.get("result",{}); acc = p.get("accuracy",{})
+            w.writerow({
+                "date": p.get("date",""), "home": p.get("home",""),
+                "away": p.get("away",""), "league": p.get("league",""),
+                "kickoff_bg": p.get("kickoff_bg",""),
+                "confidence":  pr.get("confidence",""),
+                "conf_label":  pr.get("conf_label",""),
+                "home_win":    pr.get("home_win",""), "draw": pr.get("draw",""),
+                "away_win":    pr.get("away_win",""),
+                "home_xg":     pr.get("home_xg",""),  "away_xg": pr.get("away_xg",""),
+                "btts":        pr.get("btts",""),      "over25":  pr.get("over25",""),
+                "result_home": (res or {}).get("home_goals",""),
+                "result_away": (res or {}).get("away_goals",""),
+                "outcome_correct": (acc or {}).get("outcome_correct",""),
+                "btts_correct":    (acc or {}).get("btts_correct",""),
+                "over25_correct":  (acc or {}).get("over25_correct",""),
+            })
+        st.download_button("📥 predictions.csv", buf.getvalue(),
+                           "predictions.csv", "text/csv")
+
+    # ── Prediction list ───────────────────────────────────────────
+    st.markdown('<div class="sec-hd">Прогнози</div>', unsafe_allow_html=True)
+    if not preds:
+        st.info("Няма прогнози за избрания период / филтър.")
+    else:
+        preds_sorted = sorted(preds,
+            key=lambda p: (
+                0 if p.get("accuracy") else (1 if p.get("result") else 2),
+                -(p.get("date","") or "").replace("-",""),
+            ))
+        for p in preds_sorted:
+            pr   = p.get("prediction",{}) or {}
+            acc  = p.get("accuracy",{})  or {}
+            res  = p.get("result",{})    or {}
+            oc   = acc.get("outcome_correct")
+            if oc is True:   row_icon="✅"; row_col="#22c55e"
+            elif oc is False: row_icon="❌"; row_col="#ef4444"
+            else:             row_icon="⏳"; row_col="#6b7280"
+
+            conf     = pr.get("confidence",0)
+            conf_lbl = pr.get("conf_label","?")
+            conf_c   = "#22c55e" if conf>=75 else "#f59e0b" if conf>=50 else "#ef4444"
+            hw = int((pr.get("home_win") or 0)*100)
+            dw = int((pr.get("draw") or 0)*100)
+            aw = 100-hw-dw
+
+            pred_out = acc.get("predicted_outcome","?")
+            out_map  = {"home":f"🏠 {p.get('home','')[:12]}",
+                        "draw":"⚖️ Равен",
+                        "away":f"✈️ {p.get('away','')[:12]}"}
+            pred_str = out_map.get(pred_out, pred_out)
+
+            result_str = ""
+            if res:
+                result_str = (f" · Реален: {res.get('home_goals','')}–"
+                              f"{res.get('away_goals','')}")
+            xg_str = ""
+            if pr.get("home_xg") and pr.get("away_xg"):
+                xg_str = f"xG {pr['home_xg']}–{pr['away_xg']}  "
+            sc = (pr.get("top_scoreline") or {})
+            sc_str = f"Топ: {sc.get('h','?')}–{sc.get('a','?')}  " if sc else ""
+
+            extras = []
+            if acc.get("btts_correct") is not None:
+                extras.append("BTTS ✅" if acc["btts_correct"] else "BTTS ❌")
+            if acc.get("over25_correct") is not None:
+                extras.append("O2.5 ✅" if acc["over25_correct"] else "O2.5 ❌")
+
+            st.markdown(f"""
+<div style="background:#161b27;border:1px solid #1e2737;border-radius:8px;
+            border-left:3px solid {row_col};padding:.75rem 1rem;margin:.3rem 0">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <span style="font-size:.65rem;color:#6b7280">
+        {p.get("date","")} · {p.get("league","")[:22]} · {p.get("kickoff_bg","")}
+      </span><br>
+      <span style="font-size:.92rem;font-weight:700;color:#e2e8f0">
+        {p.get("home","")} vs {p.get("away","")}
+      </span>
+    </div>
+    <div style="text-align:right">
+      <span style="font-size:1.2rem">{row_icon}</span><br>
+      <span style="font-size:.72rem;font-weight:700;color:{conf_c}">
+        {conf}% · {conf_lbl}
+      </span>
+    </div>
+  </div>
+  <div style="margin-top:.5rem;display:flex;gap:3px;height:7px;border-radius:4px;overflow:hidden">
+    <div style="flex:{hw};background:#00d4aa;opacity:.8"></div>
+    <div style="flex:{dw};background:#4b5563"></div>
+    <div style="flex:{aw};background:#f59e0b;opacity:.8"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;
+              font-size:.68rem;color:#6b7280;margin-top:2px">
+    <span>🏠 {hw}%</span><span>{dw}%</span><span>{aw}% ✈️</span>
+  </div>
+  <div style="margin-top:.4rem;font-size:.78rem">
+    <span style="color:#00d4aa">↪ {pred_str}</span>
+    <span style="color:#9ca3af"> · {xg_str}{sc_str}{result_str}</span>
+    {"".join(f'<span style="color:#9ca3af;margin-left:.4rem">{e}</span>' for e in extras)}
+  </div>
+</div>""", unsafe_allow_html=True)
+
+    # ── AI analysis of prediction performance ─────────────────────
+    if stats.get("n",0) >= 3:
+        st.markdown("")
+        st.markdown('<div class="sec-hd">🤖 AI Анализ на прогнозите</div>',
+                    unsafe_allow_html=True)
+        if "results_chat" not in st.session_state:
+            st.session_state["results_chat"] = []
+        r_hist = st.session_state["results_chat"]
+        for msg in r_hist:
+            cls  = "ai-a" if msg["role"]=="assistant" else "ai-u"
+            icon = "🤖 AI" if msg["role"]=="assistant" else "👤 Ти"
+            st.markdown(f'<div class="{cls}"><div class="ai-role">{icon}</div>'
+                        f'{msg["content"]}</div>', unsafe_allow_html=True)
+        rq = st.text_input("Въпрос за прогнозите…",
+                           key="res_q",
+                           placeholder="Кои мачове прогнозирам най-добре? Как да подобря?",
+                           label_visibility="collapsed")
+        rc1,rc2 = st.columns([4,1])
+        r_send  = rc1.button("Изпрати ↗", key="res_send")
+        if rc2.button("Изчисти", key="res_clr"):
+            st.session_state["results_chat"] = []; st.rerun()
+
+        if r_send and rq.strip() and _gemini:
+            r_ctx = (
+                f"Статистики за {stats['n']} завършени мача:\n"
+                f"  1X2 точност: {stats['outcome_pct']}%\n"
+                f"  BTTS точност: {stats['btts_pct']}%\n"
+                f"  O2.5 точност: {stats['over25_pct']}%\n"
+                f"  Точен резултат: {stats['scoreline_pct']}%\n"
+                f"  Средна xG грешка: {stats.get('avg_xg_error','—')}\n"
+                f"\nПоследни 5 прогнози:\n" +
+                "\n".join(
+                    f"  {p.get('home','')} vs {p.get('away','')} "
+                    f"→ {(p.get('accuracy') or {}).get('predicted_outcome','?')}"
+                    f" {'✅' if (p.get('accuracy') or {}).get('outcome_correct') else '❌'}"
+                    f" сигурност={(p.get('prediction') or {}).get('confidence',0)}%"
+                    for p in (preds or [])[-5:])
+            )
+            sys_p = ("Ти си анализатор на прогностични модели. "
+                     "Говори САМО на БЪЛГАРСКИ. Бъди конкретен и полезен.")
+            with st.spinner("AI анализира…"):
+                from gemini_tools import run_gemini_with_tools
+                r_answer = run_gemini_with_tools(
+                    _gemini, sys_p,
+                    f"ДАННИ:\n{r_ctx}\n\nВЪПРОС: {rq.strip()}",
+                    history=[m for m in r_hist if m["role"] in ("user","assistant")],
+                )
+            st.session_state["results_chat"].append({"role":"user","content":rq.strip()})
+            st.session_state["results_chat"].append({"role":"assistant","content":r_answer})
+            st.rerun()
