@@ -911,6 +911,90 @@ st.markdown(f"""<div class="topbar">
   <div style="font-size:.8rem;color:#6b7280">{ws_mgr.status} &nbsp;|&nbsp; 🕐 BG (UTC+3)</div>
 </div>""", unsafe_allow_html=True)
 
+
+# ═════════════════════════════════════════════════════════════════
+# AUTO-SAVE PREDICTIONS + CHECK RESULTS — runs on EVERY rerun
+# Must be outside any tab so it executes regardless of active tab.
+# ═════════════════════════════════════════════════════════════════
+def _run_predictions_background():
+    """
+    Silently save predictions for today's matches and update
+    results for any finished matches from the last 2 days.
+    Runs on every app rerun but is fast because:
+      - save_prediction() skips already-saved events
+      - update_result() skips already-updated events
+      - all API calls are @st.cache_data cached
+    """
+    from predictions_db import is_configured, save_prediction, update_result
+    if not is_configured():
+        return   # Gist not set up — skip silently
+
+    from api import get_events as _ge, get_team_fixtures as _gtf, get_h2h as _gh2h
+    from predictor import predict_match as _pm
+    from datetime import date, timedelta
+
+    today     = date.today()
+    yesterday = today - timedelta(days=1)
+
+    # ── Save predictions for today's upcoming/live matches ────────
+    try:
+        today_events = _ge(
+            date_from=today.isoformat(),
+            date_to=today.isoformat(),
+            limit=100,
+        )
+    except Exception:
+        today_events = []
+
+    for _ev in today_events:
+        _eid = _ev.get("id")
+        if not _eid: continue
+        _st = (_ev.get("status","") or "").lower()
+        # Only save predictions for not-yet-finished matches
+        if _st in ("finished","ft","ended","complete","aet","pen_finished"):
+            continue
+        _ho  = _team(_ev.get("home_team") or _ev.get("home"))
+        _ao  = _team(_ev.get("away_team") or _ev.get("away"))
+        _hn  = _ho.get("name","?")
+        _an  = _ao.get("name","?")
+        _hid = _ho.get("id")
+        _aid = _ao.get("id")
+        try:
+            _hfx  = _gtf(team_id=_hid, team_name=_hn, last_n=15)
+            _afx  = _gtf(team_id=_aid, team_name=_an, last_n=15)
+            _h2h  = _gh2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
+            _pred = _pm(_hn, _an, _hfx, _afx, _h2h)
+            save_prediction(_eid, _hn, _an, _league(_ev), _kickoff(_ev), _pred)
+        except Exception:
+            pass   # don't crash the whole app for one match
+
+    # ── Update results for finished matches (today + yesterday) ───
+    updated = 0
+    for check_date in [today.isoformat(), yesterday.isoformat()]:
+        try:
+            finished = _ge(
+                date_from=check_date,
+                date_to=check_date,
+                status="finished",
+                limit=100,
+            )
+        except Exception:
+            finished = []
+        for _ev in finished:
+            _eid = _ev.get("id")
+            if not _eid: continue
+            _sh, _sa = _score(_ev)
+            try:
+                ok = update_result(_eid, check_date, int(_sh), int(_sa))
+                if ok: updated += 1
+            except Exception:
+                pass
+
+    if updated:
+        st.toast(f"✅ {updated} прогнози обновени с реални резултати")
+
+_run_predictions_background()
+
 tab_schedule, tab_live, tab_results = st.tabs(
     ["📅 Програма", "🔴 На Живо", "📊 Резултати от прогнози"])
 
@@ -1396,50 +1480,6 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
         st.stop()
 
     today_str = date.today().isoformat()
-
-    # ── Auto-save today's predictions ────────────────────────────
-    # Silently save predictions for all upcoming/live matches today
-    _auto_events = _get_events(date_from=today_str, date_to=today_str, limit=100)
-    _saved_count = 0
-    for _ev in _auto_events:
-        _eid = _ev.get("id")
-        if not _eid: continue
-        _st = (_ev.get("status","") or "").lower()
-        if _st in ("finished","ft","ended","complete"): continue
-        _ho = _team(_ev.get("home_team") or _ev.get("home"))
-        _ao = _team(_ev.get("away_team") or _ev.get("away"))
-        _hn = _ho.get("name","?"); _an = _ao.get("name","?")
-        _hid = _ho.get("id");     _aid = _ao.get("id")
-        _lg = _league(_ev)
-        _ko = _kickoff(_ev)
-        try:
-            from predictor import predict_match
-            from api import get_team_fixtures, get_h2h
-            _hfx = get_team_fixtures(team_id=_hid, team_name=_hn, last_n=15)
-            _afx = get_team_fixtures(team_id=_aid, team_name=_an, last_n=15)
-            _h2h = get_h2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
-            _pred = predict_match(_hn, _an, _hfx, _afx, _h2h)
-            ok = save_prediction(_eid, _hn, _an, _lg, _ko, _pred)
-            if ok: _saved_count += 1
-        except Exception:
-            pass
-
-    # ── Auto-update results for finished matches ──────────────────
-    _updated = 0
-    for _ev in _auto_events:
-        _eid = _ev.get("id")
-        if not _eid: continue
-        _st = (_ev.get("status","") or "").lower()
-        if _st not in ("finished","ft","ended","complete","aet","pen_finished"):
-            continue
-        _sh, _sa = _score(_ev)
-        try:
-            ok = update_result(_eid, today_str, int(_sh), int(_sa))
-            if ok: _updated += 1
-        except Exception:
-            pass
-    if _updated:
-        st.toast(f"✅ Обновени {_updated} прогнози с реални резултати")
 
     # ── Filters ───────────────────────────────────────────────────
     st.markdown('<div class="sec-hd">Филтри</div>', unsafe_allow_html=True)
