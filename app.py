@@ -918,67 +918,67 @@ st.markdown(f"""<div class="topbar">
 # ═════════════════════════════════════════════════════════════════
 def _run_predictions_background():
     """
-    Silently save predictions for today's matches and update
-    results for any finished matches from the last 2 days.
-    Runs on every app rerun but is fast because:
-      - save_prediction() skips already-saved events
-      - update_result() skips already-updated events
-      - all API calls are @st.cache_data cached
+    Save predictions for today's matches and update results for finished ones.
+    Logs all errors to st.session_state["_pred_log"] for diagnostics.
     """
     from predictions_db import is_configured, save_prediction, update_result
     if not is_configured():
-        return   # Gist not set up — skip silently
+        return
 
     from api import get_events as _ge, get_team_fixtures as _gtf, get_h2h as _gh2h
     from predictor import predict_match as _pm
     from datetime import date, timedelta
 
-    today     = date.today()
+    log   = st.session_state.setdefault("_pred_log", [])
+    today = date.today()
     yesterday = today - timedelta(days=1)
 
-    # ── Save predictions for today's upcoming/live matches ────────
+    # Save predictions for today
     try:
-        today_events = _ge(
-            date_from=today.isoformat(),
-            date_to=today.isoformat(),
-            limit=100,
-        )
-    except Exception:
+        today_events = _ge(date_from=today.isoformat(),
+                           date_to=today.isoformat(), limit=100)
+        log.append(f"OK Заредени {len(today_events)} мача за {today.isoformat()}")
+    except Exception as e:
+        log.append(f"ERR get_events: {e}")
         today_events = []
 
+    saved = skipped = errors = 0
     for _ev in today_events:
         _eid = _ev.get("id")
         if not _eid: continue
-        _st = (_ev.get("status","") or "").lower()
-        # Only save predictions for not-yet-finished matches
-        if _st in ("finished","ft","ended","complete","aet","pen_finished"):
-            continue
+        _st  = (_ev.get("status","") or "").lower()
         _ho  = _team(_ev.get("home_team") or _ev.get("home"))
         _ao  = _team(_ev.get("away_team") or _ev.get("away"))
-        _hn  = _ho.get("name","?")
-        _an  = _ao.get("name","?")
-        _hid = _ho.get("id")
-        _aid = _ao.get("id")
+        _hn  = _ho.get("name","?"); _an = _ao.get("name","?")
+        _hid = _ho.get("id");       _aid = _ao.get("id")
+        if _st in ("finished","ft","ended","complete","aet","pen_finished"):
+            skipped += 1; continue
         try:
             _hfx  = _gtf(team_id=_hid, team_name=_hn, last_n=15)
             _afx  = _gtf(team_id=_aid, team_name=_an, last_n=15)
             _h2h  = _gh2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
             _pred = _pm(_hn, _an, _hfx, _afx, _h2h)
-            save_prediction(_eid, _hn, _an, _league(_ev), _kickoff(_ev), _pred)
-        except Exception:
-            pass   # don't crash the whole app for one match
+            ok    = save_prediction(_eid, _hn, _an,
+                                    _league(_ev), _kickoff(_ev), _pred)
+            if ok: saved += 1
+            else:
+                log.append(f"WARN save_prediction False: {_hn} vs {_an} id={_eid}")
+                errors += 1
+        except Exception as e:
+            log.append(f"ERR {_hn} vs {_an}: {e}")
+            errors += 1
 
-    # ── Update results for finished matches (today + yesterday) ───
-    updated = 0
+    log.append(f"Записани:{saved} Пропуснати:{skipped} Грешки:{errors}")
+
+    # Update results (today + yesterday)
+    updated = upd_errors = 0
     for check_date in [today.isoformat(), yesterday.isoformat()]:
         try:
-            finished = _ge(
-                date_from=check_date,
-                date_to=check_date,
-                status="finished",
-                limit=100,
-            )
-        except Exception:
+            finished = _ge(date_from=check_date, date_to=check_date,
+                           status="finished", limit=100)
+            log.append(f"Завършили на {check_date}: {len(finished)}")
+        except Exception as e:
+            log.append(f"ERR finished {check_date}: {e}")
             finished = []
         for _ev in finished:
             _eid = _ev.get("id")
@@ -987,11 +987,18 @@ def _run_predictions_background():
             try:
                 ok = update_result(_eid, check_date, int(_sh), int(_sa))
                 if ok: updated += 1
-            except Exception:
-                pass
+            except Exception as e:
+                log.append(f"ERR update_result {_eid}: {e}")
+                upd_errors += 1
 
     if updated:
-        st.toast(f"✅ {updated} прогнози обновени с реални резултати")
+        log.append(f"Обновени резултати: {updated}")
+        st.toast(f"OK {updated} прогнози обновени с резултати")
+    if upd_errors:
+        log.append(f"WARN грешки при обновяване: {upd_errors}")
+
+    st.session_state["_pred_log"] = log[-60:]
+
 
 _run_predictions_background()
 
@@ -1480,6 +1487,55 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
         st.stop()
 
     today_str = date.today().isoformat()
+
+    # ── Diagnostic panel ─────────────────────────────────────────
+    with st.expander("🔧 Диагностика (разгъни ако нищо не се записва)", expanded=False):
+        log = st.session_state.get("_pred_log", [])
+        if log:
+            for line in log[-30:]:
+                color = ("#22c55e" if line.startswith("OK") or "OK" in line[:3]
+                         else "#ef4444" if line.startswith("ERR")
+                         else "#f59e0b" if line.startswith("WARN")
+                         else "#9ca3af")
+                st.markdown(f'<span style="font-size:.78rem;color:{color};'
+                            f'font-family:monospace">{line}</span>',
+                            unsafe_allow_html=True)
+        else:
+            st.caption("Лог е празен — background функцията още не е изпълнена.")
+
+        st.markdown("---")
+        # Manual trigger button for immediate execution
+        if st.button("🔄 Принудително изпълни сега", key="force_bg"):
+            st.session_state["_pred_log"] = []
+            _run_predictions_background()
+            st.rerun()
+
+        # Gist connectivity test
+        if st.button("🔌 Тествай връзката с Gist", key="test_gist"):
+            from predictions_db import _load_raw, _gist_id
+            import requests
+            gid = _gist_id()
+            st.code(f"GIST_ID = {repr(gid)}")
+            if gid:
+                try:
+                    import streamlit as _st
+                    token = _st.secrets.get("GITHUB_TOKEN","")
+                    st.code(f"GITHUB_TOKEN = {'SET ('+str(len(token))+' chars)' if token else 'NOT SET'}")
+                    r = requests.get(
+                        f"https://api.github.com/gists/{gid}",
+                        headers={"Authorization": f"token {token}",
+                                 "Accept": "application/vnd.github.v3+json"},
+                        timeout=8)
+                    st.code(f"GET /gists/{gid[:8]}... → HTTP {r.status_code}")
+                    if r.status_code == 200:
+                        files = r.json().get("files", {})
+                        st.code(f"Files in Gist: {list(files.keys())}")
+                        content = files.get("predictions.json",{}).get("content","")
+                        st.code(f"predictions.json content ({len(content)} chars): {content[:200]}")
+                    else:
+                        st.error(f"Gist API грешка: {r.text[:300]}")
+                except Exception as e:
+                    st.error(f"Грешка: {e}")
 
     # ── Filters ───────────────────────────────────────────────────
     st.markdown('<div class="sec-hd">Филтри</div>', unsafe_allow_html=True)
