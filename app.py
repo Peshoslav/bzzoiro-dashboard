@@ -920,30 +920,36 @@ def _run_predictions_background(force: bool = False):
     """
     Save all predictions and update results — max 2 Gist writes per run.
     Cooldown: runs at most once every 10 minutes (unless force=True).
-    Prevents GitHub secondary rate limits on frequent Streamlit reruns.
     """
-    from datetime import datetime as _dt
     import time as _t
+    from datetime import date, timedelta
 
-    COOLDOWN_SEC = 600   # 10 minutes between Gist writes
+    # Log MUST be first so diagnostics always show what happened
+    log = st.session_state.setdefault("_pred_log", [])
 
+    # Cooldown check
+    COOLDOWN_SEC = 600
     if not force:
         last_run = st.session_state.get("_pred_last_run", 0)
-        if _t.time() - last_run < COOLDOWN_SEC:
-            return   # too soon — skip silently
+        secs_ago = _t.time() - last_run
+        if secs_ago < COOLDOWN_SEC:
+            log.append(f"Cooldown: {int(COOLDOWN_SEC - secs_ago)} сек до следващо изпълнение")
+            st.session_state["_pred_log"] = log[-60:]
+            return
 
-    # Mark start time immediately so concurrent reruns don't pile up
     st.session_state["_pred_last_run"] = _t.time()
+
+    # Check Gist config
     from predictions_db import (is_configured, save_predictions_batch,
                                  update_results_batch)
     if not is_configured():
+        log.append("WARN: Gist не е настроен — GITHUB_TOKEN или GIST_ID липсват в Secrets")
+        st.session_state["_pred_log"] = log[-60:]
         return
 
     from api import get_events as _ge, get_team_fixtures as _gtf, get_h2h as _gh2h
     from predictor import predict_match as _pm
-    from datetime import date, timedelta
 
-    log   = st.session_state.setdefault("_pred_log", [])
     today = date.today()
     yesterday = today - timedelta(days=1)
 
@@ -1537,8 +1543,11 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
                     st.error(f"❌ {detail}")
             except Exception as e:
                 st.error(f"Exception: {e}")
+        st.markdown("---")
+        if st.button("🔄 Принудително изпълни сега", key="force_bg"):
             st.session_state["_pred_log"] = []
-            _run_predictions_background()
+            st.session_state["_pred_last_run"] = 0
+            _run_predictions_background(force=True)
             st.rerun()
 
         # Gist connectivity test
