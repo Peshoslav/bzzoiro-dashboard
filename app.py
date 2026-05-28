@@ -918,10 +918,11 @@ st.markdown(f"""<div class="topbar">
 # ═════════════════════════════════════════════════════════════════
 def _run_predictions_background():
     """
-    Save predictions for today's matches and update results for finished ones.
-    Logs all errors to st.session_state["_pred_log"] for diagnostics.
+    Save all today\'s predictions and update results — in exactly 2 Gist writes.
+    1 PATCH for saves, 1 PATCH for result updates.
     """
-    from predictions_db import is_configured, save_prediction, update_result
+    from predictions_db import (is_configured, save_predictions_batch,
+                                 update_results_batch)
     if not is_configured():
         return
 
@@ -933,69 +934,76 @@ def _run_predictions_background():
     today = date.today()
     yesterday = today - timedelta(days=1)
 
-    # Save predictions for today
+    # ── Build prediction batch ─────────────────────────────────────
     try:
         today_events = _ge(date_from=today.isoformat(),
                            date_to=today.isoformat(), limit=100)
         log.append(f"OK Заредени {len(today_events)} мача за {today.isoformat()}")
     except Exception as e:
-        log.append(f"ERR get_events: {e}")
-        today_events = []
+        log.append(f"ERR get_events: {e}"); today_events = []
 
-    saved = skipped = errors = 0
+    batch = []; skipped_finished = 0; calc_errors = 0
     for _ev in today_events:
         _eid = _ev.get("id")
         if not _eid: continue
         _st  = (_ev.get("status","") or "").lower()
+        if _st in ("finished","ft","ended","complete","aet","pen_finished"):
+            skipped_finished += 1; continue
         _ho  = _team(_ev.get("home_team") or _ev.get("home"))
         _ao  = _team(_ev.get("away_team") or _ev.get("away"))
         _hn  = _ho.get("name","?"); _an = _ao.get("name","?")
         _hid = _ho.get("id");       _aid = _ao.get("id")
-        if _st in ("finished","ft","ended","complete","aet","pen_finished"):
-            skipped += 1; continue
         try:
             _hfx  = _gtf(team_id=_hid, team_name=_hn, last_n=15)
             _afx  = _gtf(team_id=_aid, team_name=_an, last_n=15)
             _h2h  = _gh2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
             _pred = _pm(_hn, _an, _hfx, _afx, _h2h)
-            ok    = save_prediction(_eid, _hn, _an,
-                                    _league(_ev), _kickoff(_ev), _pred)
-            if ok: saved += 1
-            else:
-                log.append(f"WARN save_prediction False: {_hn} vs {_an} id={_eid}")
-                errors += 1
+            batch.append({"event_id": _eid, "home": _hn, "away": _an,
+                          "league": _league(_ev), "kickoff_bg": _kickoff(_ev),
+                          "prediction": _pred})
         except Exception as e:
-            log.append(f"ERR {_hn} vs {_an}: {e}")
-            errors += 1
+            log.append(f"ERR predict {_hn} vs {_an}: {e}"); calc_errors += 1
 
-    log.append(f"Записани:{saved} Пропуснати:{skipped} Грешки:{errors}")
+    # Single Gist write for all predictions
+    if batch:
+        saved, skipped_dup, err = save_predictions_batch(batch)
+        if err:
+            log.append(f"ERR save_batch: {err}")
+        else:
+            log.append(f"OK Записани:{saved} Дублирани:{skipped_dup} "
+                       f"Завършили:{skipped_finished} Грешки:{calc_errors}")
+    else:
+        log.append(f"OK Нищо ново (завършили:{skipped_finished} грешки:{calc_errors})")
 
-    # Update results (today + yesterday)
-    updated = upd_errors = 0
+    # ── Build results batch ────────────────────────────────────────
+    results_batch = []
     for check_date in [today.isoformat(), yesterday.isoformat()]:
         try:
             finished = _ge(date_from=check_date, date_to=check_date,
                            status="finished", limit=100)
-            log.append(f"Завършили на {check_date}: {len(finished)}")
+            log.append(f"OK Завършили на {check_date}: {len(finished)}")
         except Exception as e:
-            log.append(f"ERR finished {check_date}: {e}")
-            finished = []
+            log.append(f"ERR finished {check_date}: {e}"); finished = []
         for _ev in finished:
             _eid = _ev.get("id")
             if not _eid: continue
             _sh, _sa = _score(_ev)
             try:
-                ok = update_result(_eid, check_date, int(_sh), int(_sa))
-                if ok: updated += 1
-            except Exception as e:
-                log.append(f"ERR update_result {_eid}: {e}")
-                upd_errors += 1
+                results_batch.append({"event_id": _eid,
+                                      "target_date": check_date,
+                                      "home_goals": int(_sh),
+                                      "away_goals": int(_sa)})
+            except (ValueError, TypeError):
+                pass
 
-    if updated:
-        log.append(f"Обновени резултати: {updated}")
-        st.toast(f"OK {updated} прогнози обновени с резултати")
-    if upd_errors:
-        log.append(f"WARN грешки при обновяване: {upd_errors}")
+    # Single Gist write for all results
+    if results_batch:
+        updated, err = update_results_batch(results_batch)
+        if err:
+            log.append(f"ERR update_batch: {err}")
+        elif updated:
+            log.append(f"OK Резултати обновени: {updated}")
+            st.toast(f"✅ {updated} прогнози проверени с реални резултати")
 
     st.session_state["_pred_log"] = log[-60:]
 
@@ -1462,6 +1470,7 @@ with tab_live:
 with tab_results:
     from predictions_db import (
         is_configured, save_prediction, update_result,
+        save_predictions_batch, update_results_batch,
         load_predictions_for_date, load_predictions_range,
         compute_stats,
     )
