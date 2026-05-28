@@ -55,17 +55,20 @@ def _headers() -> Dict:
     token = st.secrets.get("GITHUB_TOKEN","")
     if not token:
         return {}
+    # GitHub accepts both "token xxx" and "Bearer xxx" for PATs
     return {
-        "Authorization": f"token {token}",
+        "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github.v3+json",
+        "Content-Type": "application/json",
     }
 
 def _gist_id() -> str:
-    return st.secrets.get("GIST_ID","")
+    return str(st.secrets.get("GIST_ID","")).strip()
 
-@st.cache_data(ttl=60, show_spinner=False)
+
+@st.cache_data(ttl=30, show_spinner=False)
 def _load_raw() -> Dict:
-    """Load all predictions from Gist. Cached 60s."""
+    """Load all predictions from Gist. Cached 30s."""
     gid = _gist_id()
     if not gid:
         return {}
@@ -75,28 +78,51 @@ def _load_raw() -> Dict:
         if r.status_code != 200:
             return {}
         files   = r.json().get("files", {})
-        content = files.get(GIST_FILENAME, {}).get("content", "{}")
+        # Try exact name first, then case-insensitive
+        content = None
+        for fname, fdata in files.items():
+            if fname.lower() == GIST_FILENAME.lower():
+                content = fdata.get("content", "{}")
+                break
+        if content is None:
+            return {}
         return json.loads(content or "{}")
     except Exception:
         return {}
 
-def _save_raw(data: Dict) -> bool:
-    """Write all predictions to Gist. Clears the 60s cache."""
+
+def _save_raw(data: Dict) -> tuple:
+    """
+    Write all predictions to Gist.
+    Returns (success: bool, error_msg: str).
+    """
     gid = _gist_id()
     if not gid:
-        return False
+        return False, "GIST_ID не е настроен в Secrets"
+    token = st.secrets.get("GITHUB_TOKEN","")
+    if not token:
+        return False, "GITHUB_TOKEN не е настроен в Secrets"
     try:
         payload = {"files": {GIST_FILENAME: {
             "content": json.dumps(data, ensure_ascii=False, indent=2)
         }}}
-        r = requests.patch(f"{GITHUB_API}/gists/{gid}",
-                           headers=_headers(), json=payload, timeout=10)
+        r = requests.patch(
+            f"{GITHUB_API}/gists/{gid}",
+            headers=_headers(),
+            json=payload,
+            timeout=15,
+        )
         if r.status_code == 200:
-            _load_raw.clear()   # invalidate cache
-            return True
-        return False
-    except Exception:
-        return False
+            _load_raw.clear()
+            return True, ""
+        # Parse GitHub error message
+        try:
+            err_detail = r.json().get("message", r.text[:200])
+        except Exception:
+            err_detail = r.text[:200]
+        return False, f"HTTP {r.status_code}: {err_detail}"
+    except Exception as e:
+        return False, f"Exception: {e}"
 
 
 # ── Public API ────────────────────────────────────────────────────
@@ -144,7 +170,11 @@ def save_prediction(event_id: int, home: str, away: str,
         "result":   None,
         "accuracy": None,
     }
-    return _save_raw(data)
+    ok, err = _save_raw(data)
+    if not ok:
+        # Surface error so caller can log it
+        raise RuntimeError(f"Gist write failed: {err}")
+    return True
 
 
 def update_result(event_id: int, target_date: str,
@@ -221,7 +251,10 @@ def update_result(event_id: int, target_date: str,
         "xg_error_home":    round(xg_h_err,2) if xg_h_err is not None else None,
         "xg_error_away":    round(xg_a_err,2) if xg_a_err is not None else None,
     }
-    return _save_raw(data)
+    ok, err = _save_raw(data)
+    if not ok:
+        raise RuntimeError(f"Gist write failed: {err}")
+    return True
 
 
 def load_predictions_for_date(target_date: str) -> List[Dict]:
