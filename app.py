@@ -916,11 +916,24 @@ st.markdown(f"""<div class="topbar">
 # AUTO-SAVE PREDICTIONS + CHECK RESULTS — runs on EVERY rerun
 # Must be outside any tab so it executes regardless of active tab.
 # ═════════════════════════════════════════════════════════════════
-def _run_predictions_background():
+def _run_predictions_background(force: bool = False):
     """
-    Save all today\'s predictions and update results — in exactly 2 Gist writes.
-    1 PATCH for saves, 1 PATCH for result updates.
+    Save all predictions and update results — max 2 Gist writes per run.
+    Cooldown: runs at most once every 10 minutes (unless force=True).
+    Prevents GitHub secondary rate limits on frequent Streamlit reruns.
     """
+    from datetime import datetime as _dt
+    import time as _t
+
+    COOLDOWN_SEC = 600   # 10 minutes between Gist writes
+
+    if not force:
+        last_run = st.session_state.get("_pred_last_run", 0)
+        if _t.time() - last_run < COOLDOWN_SEC:
+            return   # too soon — skip silently
+
+    # Mark start time immediately so concurrent reruns don't pile up
+    st.session_state["_pred_last_run"] = _t.time()
     from predictions_db import (is_configured, save_predictions_batch,
                                  update_results_batch)
     if not is_configured():
@@ -1313,53 +1326,44 @@ def live_tab_fragment():
                         total = h_val + a_val or 1
                         ph    = max(4, min(96, int(h_val / total * 100)))
                         pa    = 100 - ph
-                        return f"""
-<div style="margin:.55rem 0" title="{tooltip}">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
-    <span style="font-size:.95rem;font-weight:800;color:{h_color}">{fmt(h_val)}</span>
-    <span style="font-size:.65rem;color:#6b7280;text-transform:uppercase;
-                 letter-spacing:1px;text-align:center;flex:1;padding:0 6px">{lbl}</span>
-    <span style="font-size:.95rem;font-weight:800;color:{a_color}">{fmt(a_val)}</span>
-  </div>
-  <div style="display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px">
-    <div style="width:{ph}%;background:{h_color};border-radius:5px 0 0 5px;opacity:.85"></div>
-    <div style="width:{pa}%;background:{a_color};border-radius:0 5px 5px 0;opacity:.85"></div>
-  </div>
-</div>"""
+                        return (
+                            f'<div style="margin:.55rem 0" title="{tooltip}">'
+                            f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">'
+                            f'<span style="font-size:.95rem;font-weight:800;color:{h_color}">{fmt(h_val)}</span>'
+                            f'<span style="font-size:.65rem;color:#6b7280;text-transform:uppercase;letter-spacing:1px;text-align:center;flex:1;padding:0 6px">{lbl}</span>'
+                            f'<span style="font-size:.95rem;font-weight:800;color:{a_color}">{fmt(a_val)}</span>'
+                            f'</div>'
+                            f'<div style="display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px">'
+                            f'<div style="width:{ph}%;background:{h_color};border-radius:5px 0 0 5px;opacity:.85"></div>'
+                            f'<div style="width:{pa}%;background:{a_color};border-radius:0 5px 5px 0;opacity:.85"></div>'
+                            f'</div></div>'
+                        )
 
                     st.markdown('<div class="sec-hd">⚽ КОЙ НАТИСКА?</div>',
                                 unsafe_allow_html=True)
 
-                    bars_html = f"""
-<div style="display:flex;justify-content:space-between;
-            margin-bottom:.5rem;font-size:.72rem;font-weight:700">
-  <span style="color:#00d4aa">🏠 {home_name}</span>
-  <span style="color:#f59e0b">✈️ {away_name}</span>
-</div>"""
-
-                    bars_html += _two_bar(
-                        att_label, att_h_val, att_a_val,
+                    legend = (
+                        '<div style="display:flex;justify-content:space-between;'
+                        'margin-bottom:.5rem;font-size:.72rem;font-weight:700">'
+                        f'<span style="color:#00d4aa">🏠 {home_name}</span>'
+                        f'<span style="color:#f59e0b">✈️ {away_name}</span></div>'
+                    )
+                    bars_html = legend
+                    bars_html += _two_bar(att_label, att_h_val, att_a_val,
                         tooltip="Колко пъти всеки отбор е заплашил вратата")
-
                     if shots_h_val or shots_a_val:
-                        bars_html += _two_bar(
-                            "Удари в рамка", shots_h_val, shots_a_val,
+                        bars_html += _two_bar("Удари в рамка", shots_h_val, shots_a_val,
                             tooltip="Удари, които вратарят е трябвало да спасява")
-
                     if xg_h_val or xg_a_val:
-                        bars_html += _two_bar(
-                            "Качество на ударите (xG)", xg_h_val, xg_a_val,
+                        bars_html += _two_bar("xG (качество на ударите)", xg_h_val, xg_a_val,
                             fmt=lambda x: f"{x:.2f}",
-                            tooltip="xG: 1.0 = трябваше да е гол. По-голямо = по-опасно.")
-
+                            tooltip="1.0 xG = трябваше да е гол. По-голямо = по-опасно.")
                     poss_h = extract_stat(_hs, "ball_possession")
                     poss_a = extract_stat(_as_, "ball_possession")
                     if poss_h or poss_a:
-                        bars_html += _two_bar(
-                            "Овладяване %", poss_h, poss_a,
+                        bars_html += _two_bar("Овладяване %", poss_h, poss_a,
                             fmt=lambda x: f"{int(x)}%")
 
-                    # Domination summary
                     dom_base_h = att_h_val or poss_h
                     dom_base_a = att_a_val or poss_a
                     if dom_base_h + dom_base_a > 0:
@@ -1367,57 +1371,52 @@ def live_tab_fragment():
                         dom_name  = home_name if dom_pct >= 50 else away_name
                         dom_val   = dom_pct if dom_pct >= 50 else 100 - dom_pct
                         dom_color = "#00d4aa" if dom_pct >= 50 else "#f59e0b"
-                        bars_html += f"""
-<div style="margin-top:.7rem;padding:.6rem .8rem;
-            background:rgba(0,0,0,.2);border-radius:8px;
-            border-left:3px solid {dom_color}">
-  <span style="font-size:.72rem;color:#6b7280">Доминира: </span>
-  <span style="font-size:.9rem;font-weight:700;color:{dom_color}">{dom_name}</span>
-  <span style="font-size:.72rem;color:#6b7280"> ({dom_val}%)</span>
-</div>"""
-
+                        bars_html += (
+                            '<div style="margin-top:.7rem;padding:.6rem .8rem;'
+                            'background:rgba(0,0,0,.2);border-radius:8px;'
+                            f'border-left:3px solid {dom_color}">'
+                            '<span style="font-size:.72rem;color:#6b7280">Доминира: </span>'
+                            f'<span style="font-size:.9rem;font-weight:700;color:{dom_color}">{dom_name}</span>'
+                            f'<span style="font-size:.72rem;color:#6b7280"> ({dom_val}%)</span></div>'
+                        )
                     st.markdown(bars_html, unsafe_allow_html=True)
+
 
                     # ── Timeline from WS series (only if enough points) ──
                     mins_list = ser.get("minutes", [])
-                    if len(mins_list) >= 4 and xg_h_ser and xg_a_ser:
+                    if len(mins_list) >= 4 and xg_h_list and xg_a_list:
                         st.markdown(
-                            '<div class="sec-hd" style="margin-top:.8rem">'
-                            '📈 КАК СЕ РАЗВИВА МАЧЪТ</div>',
+                            '<div class="sec-hd" style="margin-top:.8rem">📈 КАК СЕ РАЗВИВА МАЧЪТ</div>',
                             unsafe_allow_html=True)
-                        n       = len(mins_list)
-                        segs    = 6
-                        seg_len = max(1, n // segs)
-                        timeline_html = '<div style="display:flex;gap:3px;margin-top:.3rem">'
+                        n = len(mins_list); segs = 6; seg_len = max(1, n // segs)
+                        tl_parts = ['<div style="display:flex;gap:3px;margin-top:.3rem">']
                         for s in range(segs):
-                            start = s * seg_len
-                            end   = min(start + seg_len, n)
+                            start = s * seg_len; end = min(start + seg_len, n)
                             if start >= n: break
-                            seg_xg_h = xg_h_ser[end-1] - (xg_h_ser[start] if start > 0 else 0)
-                            seg_xg_a = xg_a_ser[end-1] - (xg_a_ser[start] if start > 0 else 0)
-                            seg_min  = mins_list[start]
-                            seg_max  = mins_list[end-1]
+                            seg_xg_h = xg_h_list[end-1] - (xg_h_list[start] if start > 0 else 0)
+                            seg_xg_a = xg_a_list[end-1] - (xg_a_list[start] if start > 0 else 0)
+                            seg_min  = mins_list[start]; seg_max = mins_list[end-1]
                             if seg_xg_h > seg_xg_a * 1.3:
                                 color = "#00d4aa"; icon = "▲"; tip = f"{home_name} натиска"
                             elif seg_xg_a > seg_xg_h * 1.3:
                                 color = "#f59e0b"; icon = "▲"; tip = f"{away_name} натиска"
                             else:
                                 color = "#4b5563"; icon = "▬"; tip = "Равностойно"
-                            timeline_html += f"""
-<div style="flex:1;text-align:center;padding:.4rem .2rem;
-            background:rgba(0,0,0,.2);border-radius:6px;
-            border-bottom:3px solid {color}" title="{tip}">
-  <div style="font-size:.6rem;color:#6b7280">{seg_min}′–{seg_max}′</div>
-  <div style="font-size:.9rem;color:{color}">{icon}</div>
-</div>"""
-                        timeline_html += "</div>"
-                        timeline_html += f"""
-<div style="display:flex;gap:10px;margin-top:.4rem;font-size:.65rem;color:#6b7280">
-  <span style="color:#00d4aa">▲ {home_name}</span>
-  <span style="color:#f59e0b">▲ {away_name}</span>
-  <span style="color:#4b5563">▬ Равно</span>
-</div>"""
-                        st.markdown(timeline_html, unsafe_allow_html=True)
+                            tl_parts.append(
+                                f'<div style="flex:1;text-align:center;padding:.4rem .2rem;'
+                                f'background:rgba(0,0,0,.2);border-radius:6px;'
+                                f'border-bottom:3px solid {color}" title="{tip}">'
+                                f'<div style="font-size:.6rem;color:#6b7280">{seg_min}\'–{seg_max}\'</div>'
+                                f'<div style="font-size:.9rem;color:{color}">{icon}</div></div>'
+                            )
+                        tl_parts.append('</div>')
+                        tl_parts.append(
+                            f'<div style="display:flex;gap:10px;margin-top:.4rem;font-size:.65rem;color:#6b7280">'
+                            f'<span style="color:#00d4aa">▲ {home_name}</span>'
+                            f'<span style="color:#f59e0b">▲ {away_name}</span>'
+                            f'<span style="color:#4b5563">▬ Равно</span></div>'
+                        )
+                        st.markdown("".join(tl_parts), unsafe_allow_html=True)
 
             # ── Right: AI chat ────────────────────────────────────
             with ai_col:
@@ -1512,9 +1511,32 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
         else:
             st.caption("Лог е празен — background функцията още не е изпълнена.")
 
-        st.markdown("---")
-        # Manual trigger button for immediate execution
-        if st.button("🔄 Принудително изпълни сега", key="force_bg"):
+        # PATCH connectivity test
+        if st.button("✏️ Тествай PATCH (запис)", key="test_patch"):
+            from predictions_db import _gist_id, _headers, _load_raw
+            import requests as _req
+            gid = _gist_id()
+            st.code(f"PATCH към GIST_ID: {gid!r}")
+            try:
+                # Read current content first
+                current = _load_raw()
+                # Write it back unchanged — safest possible test
+                payload = {"files": {"predictions.json": {
+                    "content": __import__('json').dumps(current, ensure_ascii=False)
+                }}}
+                r = _req.patch(
+                    f"https://api.github.com/gists/{gid}",
+                    headers=_headers(), json=payload, timeout=10
+                )
+                st.code(f"PATCH → HTTP {r.status_code}")
+                if r.status_code == 200:
+                    st.success("✅ PATCH работи!")
+                else:
+                    try: detail = r.json().get("message", r.text[:300])
+                    except: detail = r.text[:300]
+                    st.error(f"❌ {detail}")
+            except Exception as e:
+                st.error(f"Exception: {e}")
             st.session_state["_pred_log"] = []
             _run_predictions_background()
             st.rerun()
@@ -1671,73 +1693,59 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
             acc  = p.get("accuracy",{})  or {}
             res  = p.get("result",{})    or {}
             oc   = acc.get("outcome_correct")
-            if oc is True:   row_icon="✅"; row_col="#22c55e"
+            if oc is True:    row_icon="✅"; row_col="#22c55e"
             elif oc is False: row_icon="❌"; row_col="#ef4444"
             else:             row_icon="⏳"; row_col="#6b7280"
-
             conf     = pr.get("confidence",0)
             conf_lbl = pr.get("conf_label","?")
             conf_c   = "#22c55e" if conf>=75 else "#f59e0b" if conf>=50 else "#ef4444"
             hw = int((pr.get("home_win") or 0)*100)
             dw = int((pr.get("draw") or 0)*100)
             aw = 100-hw-dw
-
             pred_out = acc.get("predicted_outcome","?")
-            out_map  = {"home":f"🏠 {p.get('home','')[:12]}",
-                        "draw":"⚖️ Равен",
-                        "away":f"✈️ {p.get('away','')[:12]}"}
+            out_map  = {"home": f"🏠 {p.get('home','')[:12]}",
+                        "draw": "⚖️ Равен",
+                        "away": f"✈️ {p.get('away','')[:12]}"}
             pred_str = out_map.get(pred_out, pred_out)
-
-            result_str = ""
-            if res:
-                result_str = (f" · Реален: {res.get('home_goals','')}–"
-                              f"{res.get('away_goals','')}")
-            xg_str = ""
-            if pr.get("home_xg") and pr.get("away_xg"):
-                xg_str = f"xG {pr['home_xg']}–{pr['away_xg']}  "
-            sc = (pr.get("top_scoreline") or {})
-            sc_str = f"Топ: {sc.get('h','?')}–{sc.get('a','?')}  " if sc else ""
-
+            result_str = (f" · {res.get('home_goals','')}–{res.get('away_goals','')}"
+                          if res else "")
+            xg_str = (f"xG {pr['home_xg']}–{pr['away_xg']}  "
+                      if pr.get("home_xg") and pr.get("away_xg") else "")
+            sc = pr.get("top_scoreline") or {}
+            sc_str = (f"Топ:{sc.get('h','?')}–{sc.get('a','?')}  " if sc else "")
             extras = []
             if acc.get("btts_correct") is not None:
                 extras.append("BTTS ✅" if acc["btts_correct"] else "BTTS ❌")
             if acc.get("over25_correct") is not None:
                 extras.append("O2.5 ✅" if acc["over25_correct"] else "O2.5 ❌")
+            extra_str = "  ".join(extras)
+            card = (
+                f'<div style="background:#161b27;border:1px solid #1e2737;border-radius:8px;'
+                f'border-left:3px solid {row_col};padding:.75rem 1rem;margin:.3rem 0">'
+                f'<div style="display:flex;justify-content:space-between;align-items:flex-start">'
+                f'<div><span style="font-size:.65rem;color:#6b7280">'
+                f'{p.get("date","")} · {p.get("league","")[:22]} · {p.get("kickoff_bg","")}'
+                f'</span><br>'
+                f'<span style="font-size:.92rem;font-weight:700;color:#e2e8f0">'
+                f'{p.get("home","")} vs {p.get("away","")}</span></div>'
+                f'<div style="text-align:right">'
+                f'<span style="font-size:1.2rem">{row_icon}</span><br>'
+                f'<span style="font-size:.72rem;font-weight:700;color:{conf_c}">'
+                f'{conf}% · {conf_lbl}</span></div></div>'
+                f'<div style="margin-top:.5rem;display:flex;gap:3px;height:7px;border-radius:4px;overflow:hidden">'
+                f'<div style="flex:{hw};background:#00d4aa;opacity:.8"></div>'
+                f'<div style="flex:{dw};background:#4b5563"></div>'
+                f'<div style="flex:{aw};background:#f59e0b;opacity:.8"></div></div>'
+                f'<div style="display:flex;justify-content:space-between;font-size:.68rem;color:#6b7280;margin-top:2px">'
+                f'<span>🏠 {hw}%</span><span>{dw}%</span><span>{aw}% ✈️</span></div>'
+                f'<div style="margin-top:.4rem;font-size:.78rem">'
+                f'<span style="color:#00d4aa">↪ {pred_str}</span>'
+                f'<span style="color:#9ca3af"> · {xg_str}{sc_str}{result_str}</span>'
+                + (f'<span style="color:#9ca3af;margin-left:.4rem">{extra_str}</span>' if extra_str else '')
+                + '</div></div>'
+            )
+            st.markdown(card, unsafe_allow_html=True)
 
-            st.markdown(f"""
-<div style="background:#161b27;border:1px solid #1e2737;border-radius:8px;
-            border-left:3px solid {row_col};padding:.75rem 1rem;margin:.3rem 0">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start">
-    <div>
-      <span style="font-size:.65rem;color:#6b7280">
-        {p.get("date","")} · {p.get("league","")[:22]} · {p.get("kickoff_bg","")}
-      </span><br>
-      <span style="font-size:.92rem;font-weight:700;color:#e2e8f0">
-        {p.get("home","")} vs {p.get("away","")}
-      </span>
-    </div>
-    <div style="text-align:right">
-      <span style="font-size:1.2rem">{row_icon}</span><br>
-      <span style="font-size:.72rem;font-weight:700;color:{conf_c}">
-        {conf}% · {conf_lbl}
-      </span>
-    </div>
-  </div>
-  <div style="margin-top:.5rem;display:flex;gap:3px;height:7px;border-radius:4px;overflow:hidden">
-    <div style="flex:{hw};background:#00d4aa;opacity:.8"></div>
-    <div style="flex:{dw};background:#4b5563"></div>
-    <div style="flex:{aw};background:#f59e0b;opacity:.8"></div>
-  </div>
-  <div style="display:flex;justify-content:space-between;
-              font-size:.68rem;color:#6b7280;margin-top:2px">
-    <span>🏠 {hw}%</span><span>{dw}%</span><span>{aw}% ✈️</span>
-  </div>
-  <div style="margin-top:.4rem;font-size:.78rem">
-    <span style="color:#00d4aa">↪ {pred_str}</span>
-    <span style="color:#9ca3af"> · {xg_str}{sc_str}{result_str}</span>
-    {"".join(f'<span style="color:#9ca3af;margin-left:.4rem">{e}</span>' for e in extras)}
-  </div>
-</div>""", unsafe_allow_html=True)
 
     # ── AI analysis of prediction performance ─────────────────────
     if stats.get("n",0) >= 3:
