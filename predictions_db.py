@@ -257,6 +257,85 @@ def update_result(event_id: int, target_date: str,
     return True
 
 
+
+def save_predictions_batch(matches: list) -> tuple:
+    """
+    Save ALL predictions in a single Gist PATCH (one HTTP request).
+    matches: list of {event_id, home, away, league, kickoff_bg, prediction}.
+    Returns (saved, skipped, error_msg).
+    """
+    today = date.today().isoformat()
+    data  = _load_raw()
+    day   = data.setdefault(today, {})
+    saved = skipped = 0
+    for m in matches:
+        eid_s = str(m["event_id"])
+        if eid_s in day:
+            skipped += 1; continue
+        pred = m["prediction"]
+        day[eid_s] = {
+            "event_id": m["event_id"], "home": m["home"], "away": m["away"],
+            "league": m["league"], "kickoff_bg": m["kickoff_bg"],
+            "saved_at": datetime.utcnow().isoformat(timespec="seconds"),
+            "prediction": {
+                "home_win":         pred.get("home_win"),
+                "draw":             pred.get("draw"),
+                "away_win":         pred.get("away_win"),
+                "home_xg":          pred.get("home_xg"),
+                "away_xg":          pred.get("away_xg"),
+                "btts":             pred.get("btts"),
+                "over25":           pred.get("over25"),
+                "top_scoreline":    (pred.get("top_scorelines") or [{}])[0],
+                "confidence":       pred.get("confidence"),
+                "data_confidence":  pred.get("data_confidence"),
+                "model_confidence": pred.get("model_confidence"),
+                "conf_label":       pred.get("conf_label", "—"),
+            },
+            "result": None, "accuracy": None,
+        }
+        saved += 1
+    if saved == 0:
+        return 0, skipped, ""
+    ok, err = _save_raw(data)
+    return (saved, skipped, "") if ok else (0, skipped, err)
+
+
+def update_results_batch(finished_matches: list) -> tuple:
+    """
+    Update results for ALL finished matches in a single Gist PATCH.
+    finished_matches: list of {event_id, target_date, home_goals, away_goals}.
+    Returns (updated, error_msg).
+    """
+    data = _load_raw(); updated = 0
+    for m in finished_matches:
+        eid_s = str(m["event_id"])
+        hg = m["home_goals"]; ag = m["away_goals"]; td = m["target_date"]
+        found = td if eid_s in data.get(td, {}) else next(
+            (d for d, dd in data.items() if eid_s in dd), None)
+        if not found: continue
+        entry = data[found][eid_s]
+        if entry.get("result"): continue
+        pred = entry.get("prediction", {})
+        entry["result"] = {"home_goals": hg, "away_goals": ag}
+        hw = pred.get("home_win",0); dw = pred.get("draw",0); aw = pred.get("away_win",0)
+        po = "home" if hw>=dw and hw>=aw else "draw" if dw>=hw and dw>=aw else "away"
+        ao = "home" if hg>ag else "draw" if hg==ag else "away"
+        sc = pred.get("top_scoreline", {}) or {}
+        entry["accuracy"] = {
+            "outcome_correct":   ao == po,
+            "predicted_outcome": po, "actual_outcome": ao,
+            "scoreline_correct": sc.get("h")==hg and sc.get("a")==ag,
+            "btts_correct":      (hg>0 and ag>0)==((pred.get("btts") or 0)>=0.5),
+            "over25_correct":    (hg+ag>2)==((pred.get("over25") or 0)>=0.5),
+            "xg_error_home":     round(abs(pred.get("home_xg",0)-hg),2) if pred.get("home_xg") is not None else None,
+            "xg_error_away":     round(abs(pred.get("away_xg",0)-ag),2) if pred.get("away_xg") is not None else None,
+        }
+        updated += 1
+    if updated == 0: return 0, ""
+    ok, err = _save_raw(data)
+    return (updated, "") if ok else (0, err)
+
+
 def load_predictions_for_date(target_date: str) -> List[Dict]:
     data = _load_raw()
     return list(data.get(target_date, {}).values())
