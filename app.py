@@ -1390,7 +1390,7 @@ def live_tab_fragment():
 
                     # ── Timeline from WS series (only if enough points) ──
                     mins_list = ser.get("minutes", [])
-                    if len(mins_list) >= 4 and xg_h_list and xg_a_list:
+                    if len(mins_list) >= 4 and xg_h_ser and xg_a_ser:
                         st.markdown(
                             '<div class="sec-hd" style="margin-top:.8rem">📈 КАК СЕ РАЗВИВА МАЧЪТ</div>',
                             unsafe_allow_html=True)
@@ -1399,8 +1399,8 @@ def live_tab_fragment():
                         for s in range(segs):
                             start = s * seg_len; end = min(start + seg_len, n)
                             if start >= n: break
-                            seg_xg_h = xg_h_list[end-1] - (xg_h_list[start] if start > 0 else 0)
-                            seg_xg_a = xg_a_list[end-1] - (xg_a_list[start] if start > 0 else 0)
+                            seg_xg_h = xg_h_ser[end-1] - (xg_h_ser[start] if start > 0 else 0)
+                            seg_xg_a = xg_a_ser[end-1] - (xg_a_ser[start] if start > 0 else 0)
                             seg_min  = mins_list[start]; seg_max = mins_list[end-1]
                             if seg_xg_h > seg_xg_a * 1.3:
                                 color = "#00d4aa"; icon = "▲"; tip = f"{home_name} натиска"
@@ -1877,4 +1877,6 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
                 )
             st.session_state["results_chat"].append({"role":"user","content":rq.strip()})
             st.session_state["results_chat"].append({"role":"assistant","content":r_answer})
-            st.rerun()
+            # Show answer immediately without rerun (rerun would blank the tab)
+            st.markdown(f'<div class="ai-a"><div class="ai-role">🤖 AI</div>'
+                        f'{r_answer}</div>', unsafe_allow_html=True)
