@@ -1589,6 +1589,32 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
                 except: detail = r.text[:300]
                 st.error(f"HTTP {r.status_code}: {detail}")
 
+        if st.button("🔑 Провери scope-овете на токена", key="check_scopes"):
+            import requests as _req
+            token = st.secrets.get("GITHUB_TOKEN","")
+            r = _req.get("https://api.github.com/user",
+                         headers={"Authorization": f"Bearer {token}",
+                                  "Accept": "application/vnd.github.v3+json"},
+                         timeout=8)
+            scopes = r.headers.get("X-OAuth-Scopes","(не е върнато)")
+            accepted = r.headers.get("X-Accepted-OAuth-Scopes","?")
+            st.code(f"HTTP {r.status_code}\n"
+                    f"X-OAuth-Scopes: {scopes}\n"
+                    f"X-Accepted-OAuth-Scopes: {accepted}")
+            if "gist" in scopes:
+                st.success("✅ Токенът има `gist` scope")
+            else:
+                st.error("❌ Токенът НЯМА `gist` scope! Трябва нов токен.")
+                st.markdown("""
+**Как да създадеш нов токен с `gist` scope:**
+1. github.com → профилна снимка → **Settings**
+2. **Developer settings** → **Personal access tokens** → **Tokens (classic)**
+3. **Generate new token (classic)**
+4. Отбележи само ☑️ **`gist`**
+5. Generate → копирай → постави в Streamlit Secrets като `GITHUB_TOKEN`
+6. Reboot app
+""")
+
         st.markdown("---")
         if st.button("🔄 Принудително изпълни сега", key="force_bg"):
             st.session_state["_pred_log"] = []
