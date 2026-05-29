@@ -1564,6 +1564,31 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
             else:
                 st.error(f"HTTP {r.status_code}: {r.text[:200]}")
 
+        if st.button("🔧 Създай нов Gist автоматично", key="create_gist"):
+            import requests as _req
+            token = st.secrets.get("GITHUB_TOKEN","")
+            hdrs  = {"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github.v3+json",
+                     "Content-Type": "application/json"}
+            payload = {
+                "description": "Football Analytics — predictions DB",
+                "public": False,
+                "files": {"predictions.json": {"content": "{}"}}
+            }
+            r = _req.post("https://api.github.com/gists",
+                          headers=hdrs, json=payload, timeout=10)
+            if r.status_code == 201:
+                new_id    = r.json().get("id","?")
+                new_owner = r.json().get("owner",{}).get("login","?")
+                st.success(f"✅ Gist създаден от акаунт **{new_owner}**!")
+                st.code(f'GIST_ID = "{new_id}"')
+                st.warning("**Копирай новото GIST_ID горе и го постави в "
+                           "Streamlit Secrets → Save → Reboot app.**")
+            else:
+                try:    detail = r.json().get("message", r.text[:300])
+                except: detail = r.text[:300]
+                st.error(f"HTTP {r.status_code}: {detail}")
+
         st.markdown("---")
         if st.button("🔄 Принудително изпълни сега", key="force_bg"):
             st.session_state["_pred_log"] = []
