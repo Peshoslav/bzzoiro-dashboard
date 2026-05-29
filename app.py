@@ -1543,6 +1543,23 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
                     st.error(f"❌ {detail}")
             except Exception as e:
                 st.error(f"Exception: {e}")
+        # Token owner check — the MOST important diagnostic
+        if st.button("👤 Кой акаунт е токенът?", key="check_token_owner"):
+            import requests as _req
+            token = st.secrets.get("GITHUB_TOKEN","")
+            r = _req.get("https://api.github.com/user",
+                         headers={"Authorization": f"Bearer {token}",
+                                  "Accept": "application/vnd.github.v3+json"},
+                         timeout=8)
+            if r.status_code == 200:
+                login = r.json().get("login","?")
+                st.success(f"✅ Токенът принадлежи на: **{login}**")
+                st.info(f"Сега отиди на gist.github.com и провери дали "
+                        f"Gist-ът е създаден от акаунт **{login}**. "
+                        f"Ако не — влез като {login} и създай нов Gist.")
+            else:
+                st.error(f"HTTP {r.status_code}: {r.text[:200]}")
+
         st.markdown("---")
         if st.button("🔄 Принудително изпълни сега", key="force_bg"):
             st.session_state["_pred_log"] = []
