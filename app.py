@@ -1767,7 +1767,7 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
         preds_sorted = sorted(preds,
             key=lambda p: (
                 0 if p.get("accuracy") else (1 if p.get("result") else 2),
-                -(p.get("date","") or "").replace("-",""),
+                -int((p.get("date","") or "1970-01-01").replace("-","")),
             ))
         for p in preds_sorted:
             pr   = p.get("prediction",{}) or {}
