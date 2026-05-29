@@ -1518,7 +1518,11 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
             st.caption("Лог е празен — background функцията още не е изпълнена.")
 
         # PATCH connectivity test
-        if st.button("✏️ Тествай PATCH (запис)", key="test_patch"):
+        if st.button("🔍 Покажи заредените Secrets", key="show_secrets"):
+            gid   = st.secrets.get("GIST_ID","НЕ Е НАМЕРЕН")
+            token = st.secrets.get("GITHUB_TOKEN","")
+            st.code(f"GIST_ID      = {gid!r}  ({len(str(gid))} chars)\n"
+                    f"GITHUB_TOKEN = {'SET ('+str(len(token))+' chars)' if token else 'NOT SET'}")
             from predictions_db import _gist_id, _headers, _load_raw
             import requests as _req
             gid = _gist_id()
