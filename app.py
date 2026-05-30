@@ -250,12 +250,12 @@ def render_prediction_panel(home_name: str, away_name: str,
                              home_id, away_id,
                              home_fixtures: List[Dict],
                              away_fixtures: List[Dict],
-                             h2h_matches:  List[Dict]):
+                             h2h_matches:  List[Dict],
+                             market_odds:  Optional[Dict] = None):
     """
-    Full Dixon-Coles prediction panel.
-    Designed to replace / supplement the empty API prediction section.
+    Ensemble prediction panel (Dixon-Coles + EMA + Market).
     """
-    from predictor import predict_match
+    from predictor import predict_match, should_show_prediction
 
     if len(home_fixtures) < 1 and len(away_fixtures) < 1:
         st.info("Няма достатъчно форм данни за прогноза.")
@@ -266,12 +266,23 @@ def render_prediction_panel(home_name: str, away_name: str,
             home_name, away_name,
             home_fixtures, away_fixtures,
             h2h_matches,
+            market_odds=market_odds,
         )
+
+    # ── Quality filter badge ──────────────────────────────────────
+    show, reason = should_show_prediction(p)
+    if not show:
+        st.markdown(
+            f'<div style="background:rgba(239,68,68,.08);border:1px solid rgba(239,68,68,.3);'
+            f'border-radius:8px;padding:.6rem 1rem;margin-bottom:.8rem;font-size:.82rem;color:#ef4444">'
+            f'⚠️ <b>Ниско качество на прогнозата</b> — {reason}<br>'
+            f'<span style="color:#9ca3af;font-size:.75rem">Прогнозата е изчислена, но не е препоръчана.</span>'
+            f'</div>', unsafe_allow_html=True)
 
     if p["warning"]:
         st.warning(p["warning"])
 
-    # ── Confidence breakdown (3 components) ──────────────────────
+    # ── Confidence breakdown (4 components now) ───────────────────
     conf       = p["confidence"]
     d_conf     = p.get("data_confidence",  0)
     m_conf     = p.get("model_confidence", 0)
@@ -284,41 +295,63 @@ def render_prediction_panel(home_name: str, away_name: str,
                   "➖ Неутрален")
     align_color= "#22c55e" if h2h_align>0.2 else "#ef4444" if h2h_align<-0.1 else "#6b7280"
 
-    st.markdown(f"""
-    <div style="background:#0d1117;border:1px solid #1e2737;border-radius:10px;
-                padding:.8rem 1rem;margin-bottom:1rem">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">
-        <span style="font-size:.75rem;font-weight:700;color:#9ca3af">
-          СИГУРНОСТ НА ПРОГНОЗАТА
-        </span>
-        <span style="font-size:1.1rem;font-weight:900;color:{conf_color}">
-          {conf}% &nbsp;<span style="font-size:.75rem;font-weight:600">{conf_label}</span>
-        </span>
-      </div>
-      <div style="height:8px;background:#1e2737;border-radius:4px;margin-bottom:.7rem">
-        <div style="width:{conf}%;height:100%;border-radius:4px;
-                    background:linear-gradient(90deg,{conf_color}88,{conf_color})"></div>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:.4rem">
-        <div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">
-          <div style="font-size:.6rem;color:#6b7280">📊 Данни</div>
-          <div style="font-size:.85rem;font-weight:700;color:#0ea5e9">{d_conf}%</div>
-          <div style="font-size:.6rem;color:#4b5563">
-            {p['home_matches_used']}+{p['away_matches_used']} мача
-          </div>
-        </div>
-        <div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">
-          <div style="font-size:.6rem;color:#6b7280">🎯 Категоричност</div>
-          <div style="font-size:.85rem;font-weight:700;color:#a78bfa">{m_conf}%</div>
-          <div style="font-size:.6rem;color:#4b5563">концентрация на вероятности</div>
-        </div>
-        <div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">
-          <div style="font-size:.6rem;color:#6b7280">⚔️ H2H</div>
-          <div style="font-size:.75rem;font-weight:700;color:{align_color}">{align_str}</div>
-          <div style="font-size:.6rem;color:#4b5563">{p.get('h2h_used',0)} мача H2H</div>
-        </div>
-      </div>
-    </div>""", unsafe_allow_html=True)
+    has_market  = p.get("has_market", False)
+    mkt_bonus   = p.get("market_alignment", 0)
+    mkt_str     = ("✅ Съгласуване" if mkt_bonus > 5 else
+                   "❌ Разминаване" if mkt_bonus < 0 else
+                   "➖ Без пазар")
+    mkt_color   = "#22c55e" if mkt_bonus > 5 else "#ef4444" if mkt_bonus < 0 else "#6b7280"
+    has_ema     = p.get("has_ema", False)
+    rest_h      = p.get("rest_home", 1.0)
+    rest_a      = p.get("rest_away", 1.0)
+    rest_note   = ("⚠️ Умора" if rest_h < 1 or rest_a < 1 else "✅ Нормално")
+    rest_color  = "#ef4444" if rest_h < 1 or rest_a < 1 else "#22c55e"
+
+    # Component labels
+    if has_market and has_ema:
+        comp_label = "DC 40% + EMA 35% + Пазар 25%"
+    elif has_ema:
+        comp_label = "DC 53% + EMA 47% (без пазарни коеф.)"
+    else:
+        comp_label = "DC 100% (малко данни за EMA)"
+
+    st.markdown(
+        f'<div style="background:#0d1117;border:1px solid #1e2737;border-radius:10px;'
+        f'padding:.8rem 1rem;margin-bottom:1rem">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:.6rem">'
+        f'<span style="font-size:.75rem;font-weight:700;color:#9ca3af">СИГУРНОСТ НА ПРОГНОЗАТА</span>'
+        f'<span style="font-size:1.1rem;font-weight:900;color:{conf_color}">'
+        f'{conf}% <span style="font-size:.75rem;font-weight:600">{conf_label}</span></span>'
+        f'</div>'
+        f'<div style="height:8px;background:#1e2737;border-radius:4px;margin-bottom:.5rem">'
+        f'<div style="width:{conf}%;height:100%;border-radius:4px;'
+        f'background:linear-gradient(90deg,{conf_color}88,{conf_color})"></div></div>'
+        f'<div style="font-size:.65rem;color:#4b5563;margin-bottom:.6rem">⚙️ {comp_label}</div>'
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:.35rem">'
+        f'<div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">'
+        f'<div style="font-size:.6rem;color:#6b7280">📊 Данни</div>'
+        f'<div style="font-size:.85rem;font-weight:700;color:#0ea5e9">{d_conf}%</div>'
+        f'<div style="font-size:.6rem;color:#4b5563">{p["home_matches_used"]}+{p["away_matches_used"]} мача</div>'
+        f'</div>'
+        f'<div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">'
+        f'<div style="font-size:.6rem;color:#6b7280">🎯 Категоричност</div>'
+        f'<div style="font-size:.85rem;font-weight:700;color:#a78bfa">{m_conf}%</div>'
+        f'<div style="font-size:.6rem;color:#4b5563">разпределение 1X2</div>'
+        f'</div>'
+        f'<div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">'
+        f'<div style="font-size:.6rem;color:#6b7280">💰 Пазар</div>'
+        f'<div style="font-size:.72rem;font-weight:700;color:{mkt_color}">{mkt_str}</div>'
+        f'<div style="font-size:.6rem;color:#4b5563">{"вкл. в ансамбъл" if has_market else "не е наличен"}</div>'
+        f'</div>'
+        f'<div style="background:#161b27;border-radius:6px;padding:.4rem .5rem">'
+        f'<div style="font-size:.6rem;color:#6b7280">😴 Почивка</div>'
+        f'<div style="font-size:.72rem;font-weight:700;color:{rest_color}">{rest_note}</div>'
+        f'<div style="font-size:.6rem;color:#4b5563">'
+        f'{int(rest_h*100)}% / {int(rest_a*100)}%</div>'
+        f'</div>'
+        f'</div></div>',
+        unsafe_allow_html=True
+    )
 
     # ── Win probability big display ───────────────────────────────
     hw = int(p["home_win"] * 100)
@@ -403,9 +436,37 @@ def render_prediction_panel(home_name: str, away_name: str,
                        color:{wcolor};text-align:right">{pct}%</span>
         </div>""", unsafe_allow_html=True)
 
-    st.caption(f"Среден брой голове в извадката: "
-               f"{p['league_avg_goals']:.1f} на мач  ·  "
-               f"Dixon-Coles модел с time-decay и H2H тегла")
+    # ── Ensemble component breakdown ─────────────────────────────
+    dc_hw  = p.get("dc_hw",  p["home_win"])
+    ema_hw = p.get("ema_hw", p["home_win"])
+    mkt    = p.get("market")
+    has_ema    = p.get("has_ema",    False)
+    has_market = p.get("has_market", False)
+    rm_home = p.get("rest_home", 1.0)
+    rm_away = p.get("rest_away", 1.0)
+
+    comp_parts = [
+        f'<span style="color:#0ea5e9">DC {int(dc_hw*100)}%</span>',
+    ]
+    if has_ema:
+        comp_parts.append(f'<span style="color:#a78bfa">EMA {int(ema_hw*100)}%</span>')
+    if mkt:
+        comp_parts.append(
+            f'<span style="color:#f59e0b">Пазар {int(mkt["home_win"]*100)}%</span>')
+
+    rest_str = ""
+    if rm_home < 1.0: rest_str += f" · ⚡ Умора {home_name} ({int((1-rm_home)*100)}%↓)"
+    if rm_away < 1.0: rest_str += f" · ⚡ Умора {away_name} ({int((1-rm_away)*100)}%↓)"
+
+    st.markdown(
+        f'<div style="font-size:.72rem;color:#6b7280;margin-top:.5rem">'
+        f'Компоненти за домакин: {" · ".join(comp_parts)}'
+        f'{rest_str}'
+        f'<br>Ср. голове: {p["league_avg_goals"]:.1f}/мач · '
+        f'Ансамбъл: DC {int(40 if has_market else 55)}% + '
+        f'EMA {int(35 if has_market else 45)}%'
+        f'{"+ Пазар 25%" if has_market else " (без пазарни данни)"}'
+        f'</div>', unsafe_allow_html=True)
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -754,7 +815,8 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
         _hfx = get_team_fixtures(team_id=home_id, team_name=home_name, last_n=15)
         _afx = get_team_fixtures(team_id=away_id, team_name=away_name, last_n=15)
         _h2h = get_h2h(home_id, away_id, home_name=home_name, away_name=away_name, last_n=8)
-        _pred = predict_match(home_name, away_name, _hfx, _afx, _h2h)
+        _pred = predict_match(home_name, away_name, _hfx, _afx, _h2h,
+                              market_odds=get_event_odds(eid) if eid else {})
         ctx += (
             f"\n\nДИКСОН-КОУЛС ПРОГНОЗА:"
             f"\n  {home_name} победа: {int(_pred['home_win']*100)}%"
@@ -859,18 +921,19 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
     # ── Odds / Prediction tab ─────────────────────────────────────
     with tabs[odds_tab_idx]:
 
-        # ── 1. Dixon-Coles model prediction (always shown) ────────
-        st.markdown('<div class="sec-hd">🧮 Статистическа прогноза (Dixon-Coles)</div>',
+        # ── 1. Ensemble prediction (DC + EMA + Market) ────────────
+        st.markdown('<div class="sec-hd">🧮 Ансамблова прогноза</div>',
                     unsafe_allow_html=True)
-        # Load form data (already cached from team tabs — free re-call)
-        home_fx = get_team_fixtures(team_id=home_id, team_name=home_name, last_n=15)
-        away_fx = get_team_fixtures(team_id=away_id, team_name=away_name, last_n=15)
-        h2h_fx  = get_h2h(home_id, away_id,
-                           home_name=home_name, away_name=away_name,
-                           last_n=8)
+        home_fx   = get_team_fixtures(team_id=home_id, team_name=home_name, last_n=15)
+        away_fx   = get_team_fixtures(team_id=away_id, team_name=away_name, last_n=15)
+        h2h_fx    = get_h2h(home_id, away_id,
+                             home_name=home_name, away_name=away_name, last_n=8)
+        # Fetch odds now — passed to predictor as Component C
+        _m_odds   = get_event_odds(eid) if eid else {}
         render_prediction_panel(home_name, away_name,
                                 home_id, away_id,
-                                home_fx, away_fx, h2h_fx)
+                                home_fx, away_fx, h2h_fx,
+                                market_odds=_m_odds)
 
         # ── 2. Bookmaker odds for comparison ──────────────────────
         st.markdown("")
@@ -881,11 +944,9 @@ def render_match_detail(m: Dict, eid, home_name: str, away_name: str,
             bk_data = get_odds_comparison(eid)
             if bk_data:
                 shown_odds = render_bookmaker_odds(bk_data, home_name, away_name) or False
-            if not shown_odds:
-                odds = get_event_odds(eid)
-                if odds:
-                    render_odds_row(odds)
-                    shown_odds = True
+            if not shown_odds and _m_odds:
+                render_odds_row(_m_odds)
+                shown_odds = True
         if not shown_odds:
             st.caption("Букмейкърски коефициенти не са налични от API-то.")
 
@@ -947,7 +1008,7 @@ def _run_predictions_background(force: bool = False):
         st.session_state["_pred_log"] = log[-60:]
         return
 
-    from api import get_events as _ge, get_team_fixtures as _gtf, get_h2h as _gh2h
+    from api import get_events as _ge, get_team_fixtures as _gtf, get_h2h as _gh2h, get_event_odds as _get_odds
     from predictor import predict_match as _pm
 
     today = date.today()
@@ -976,7 +1037,8 @@ def _run_predictions_background(force: bool = False):
             _hfx  = _gtf(team_id=_hid, team_name=_hn, last_n=15)
             _afx  = _gtf(team_id=_aid, team_name=_an, last_n=15)
             _h2h  = _gh2h(_hid, _aid, home_name=_hn, away_name=_an, last_n=8)
-            _pred = _pm(_hn, _an, _hfx, _afx, _h2h)
+            _pred = _pm(_hn, _an, _hfx, _afx, _h2h,
+                        market_odds=_get_odds(_eid) if _eid else {})
             batch.append({"event_id": _eid, "home": _hn, "away": _an,
                           "league": _league(_ev), "kickoff_bg": _kickoff(_ev),
                           "prediction": _pred})
