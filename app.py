@@ -1086,6 +1086,23 @@ def _run_predictions_background(force: bool = False):
             log.append(f"OK Резултати обновени: {updated}")
             st.toast(f"✅ {updated} прогнози проверени с реални резултати")
 
+    # ── Daily calibration at 23:00 BG ─────────────────────────────
+    try:
+        from calibration import should_run_calibration, run_daily_calibration
+        if should_run_calibration() and _gemini:
+            log.append("Стартиране на дневна калибрация...")
+            result = run_daily_calibration(_gemini, days_back=14)
+            if result.get("success"):
+                log.append(f"OK Калибрация: {result['reasoning'][:120]}")
+                for k, v in result["params"].items():
+                    old_v = result["old_params"].get(k, "?")
+                    if abs(float(v) - float(old_v)) > 0.001:
+                        log.append(f"   {k}: {old_v} -> {v}")
+            else:
+                log.append(f"WARN Калибрация грешка: {result.get('error','?')}")
+    except Exception as e:
+        log.append(f"ERR calibration: {e}")
+
     st.session_state["_pred_log"] = log[-60:]
 
 
@@ -1889,6 +1906,97 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
             )
             st.markdown(card, unsafe_allow_html=True)
 
+
+    # ── Calibration history panel ─────────────────────────────────
+    try:
+        from calibration import get_calibration_history, load_calibration, run_daily_calibration
+        cal_hist = get_calibration_history()
+        current_cal = load_calibration()
+
+        with st.expander("⚙️ Калибрация на модела", expanded=False):
+            # Current params
+            st.markdown('<div class="sec-hd">Текущи параметри</div>',
+                        unsafe_allow_html=True)
+            cp1, cp2, cp3 = st.columns(3)
+            cp1.markdown(
+                f'<div class="tile"><div class="tile-val">{current_cal["home_advantage"]:.3f}</div>'
+                f'<div class="tile-lbl">Домакинско предимство</div></div>',
+                unsafe_allow_html=True)
+            cp2.markdown(
+                f'<div class="tile"><div class="tile-val">{current_cal["xg_scale"]:.3f}</div>'
+                f'<div class="tile-lbl">xG Мащаб</div></div>',
+                unsafe_allow_html=True)
+            cp3.markdown(
+                f'<div class="tile"><div class="tile-val">{int(current_cal["decay_half_life"])}д</div>'
+                f'<div class="tile-lbl">Полуживот форма</div></div>',
+                unsafe_allow_html=True)
+            cp4, cp5, cp6 = st.columns(3)
+            cp4.markdown(
+                f'<div class="tile"><div class="tile-val">{int(current_cal["w_market"]*100)}%</div>'
+                f'<div class="tile-lbl">Тегло пазар</div></div>',
+                unsafe_allow_html=True)
+            cp5.markdown(
+                f'<div class="tile"><div class="tile-val">{int(current_cal["w_ema"]*100)}%</div>'
+                f'<div class="tile-lbl">Тегло EMA</div></div>',
+                unsafe_allow_html=True)
+            cp6.markdown(
+                f'<div class="tile"><div class="tile-val">{current_cal["rho"]:.3f}</div>'
+                f'<div class="tile-lbl">ρ (Dixson-Coles)</div></div>',
+                unsafe_allow_html=True)
+
+            # Manual trigger
+            st.markdown("")
+            if st.button("🔧 Калибрирай сега (ръчно)", key="manual_cal"):
+                if _gemini:
+                    with st.spinner("Gemini анализира резултатите и калибрира…"):
+                        result = run_daily_calibration(_gemini, days_back=14)
+                    if result.get("success"):
+                        st.success(f"✅ {result['reasoning']}")
+                        changes = {k: (result["old_params"].get(k), v)
+                                   for k, v in result["params"].items()
+                                   if abs(float(v) - float(result["old_params"].get(k,0))) > 0.001}
+                        if changes:
+                            st.markdown("**Промени:**")
+                            for k, (old_v, new_v) in changes.items():
+                                arrow = "↑" if new_v > old_v else "↓"
+                                st.markdown(f"- `{k}`: {old_v} → **{new_v}** {arrow}")
+                        else:
+                            st.info("Параметрите са оптимални — без промени.")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {result.get('error','Неизвестна грешка')}")
+                else:
+                    st.error("GEMINI_API_KEY не е настроен.")
+
+            # History
+            if cal_hist:
+                st.markdown('<div class="sec-hd">История на калибрациите</div>',
+                            unsafe_allow_html=True)
+                for entry in reversed(cal_hist[-5:]):
+                    with st.expander(
+                        f"📅 {entry.get('date','')}  —  {entry.get('reasoning','')[:60]}",
+                        expanded=False):
+                        st.markdown(f"**Обяснение:** {entry.get('reasoning','')}")
+                        old_p = entry.get("old_params", {})
+                        new_p = entry.get("new_params", {})
+                        rows  = [(k, old_p.get(k,"?"), new_p.get(k,"?"))
+                                 for k in DEFAULTS_KEYS
+                                 if abs(float(new_p.get(k,0)) -
+                                        float(old_p.get(k,0))) > 0.001]
+                        if rows:
+                            for k, o, n in rows:
+                                arrow = "↑" if float(n)>float(o) else "↓"
+                                st.markdown(f"- `{k}`: {o} → **{n}** {arrow}")
+                        if entry.get("stats"):
+                            s = entry["stats"]
+                            st.caption(
+                                f"Базирано на {s.get('n_matches','?')} мача  ·  "
+                                f"1X2: {s.get('overall_1x2_accuracy','?')}%  ·  "
+                                f"xG bias: {(s.get('xg_bias') or {}).get('home_bias','?')}")
+    except Exception as _ce:
+        pass   # calibration panel is non-critical
+
+    DEFAULTS_KEYS = ["home_advantage","rho","decay_half_life","w_market","w_ema","xg_scale"]
 
     # ── AI analysis of prediction performance ─────────────────────
     if stats.get("n",0) >= 3:
