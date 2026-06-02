@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Tuple, Any
 from datetime import datetime, date
 import streamlit as st
 
-# ── Constants ─────────────────────────────────────────────────────
+# ── Constants (base defaults — overridden by daily calibration) ───
 HOME_ADVANTAGE  = 1.20
 RHO             = -0.13   # Dixon-Coles low-score correction
 DECAY_HALF_LIFE = 60      # days
@@ -41,9 +41,35 @@ MIN_MATCHES     = 3
 W_DC      = 0.40
 W_EMA     = 0.35
 W_MARKET  = 0.25
-# When no market odds: redistribute market weight
-W_DC_NOM  = W_DC  / (W_DC + W_EMA)   # ≈ 0.533
-W_EMA_NOM = W_EMA / (W_DC + W_EMA)   # ≈ 0.467
+W_DC_NOM  = W_DC  / (W_DC + W_EMA)
+W_EMA_NOM = W_EMA / (W_DC + W_EMA)
+
+
+def _load_calibration_params() -> None:
+    """
+    Override module-level constants with AI-calibrated values from Gist.
+    Called once at import time. Silently uses defaults if Gist unavailable.
+    """
+    global HOME_ADVANTAGE, RHO, DECAY_HALF_LIFE, W_MARKET, W_EMA, W_DC
+    global W_DC_NOM, W_EMA_NOM, XG_SCALE
+    try:
+        from calibration import load_calibration
+        p = load_calibration()
+        HOME_ADVANTAGE  = p.get("home_advantage",  HOME_ADVANTAGE)
+        RHO             = p.get("rho",             RHO)
+        DECAY_HALF_LIFE = p.get("decay_half_life", DECAY_HALF_LIFE)
+        W_MARKET        = p.get("w_market",        W_MARKET)
+        W_EMA           = p.get("w_ema",           W_EMA)
+        W_DC            = 1.0 - W_EMA - W_MARKET   # keep weights summing to 1
+        W_DC_NOM        = W_DC  / (W_DC + W_EMA)
+        W_EMA_NOM       = W_EMA / (W_DC + W_EMA)
+        XG_SCALE        = p.get("xg_scale", 1.0)
+    except Exception:
+        XG_SCALE = 1.0   # default if calibration unavailable
+
+XG_SCALE = 1.0   # global xG multiplier (1.0 = no adjustment)
+_load_calibration_params()
+
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -434,6 +460,10 @@ def predict_match(
         blend_mu  = dc_mu *0.55 + ema_mu *0.45
     else:
         blend_lam = dc_lam; blend_mu = dc_mu
+
+    # Apply global xG calibration scale (adjusted daily by AI)
+    blend_lam = max(0.1, min(blend_lam * XG_SCALE, MAX_GOALS - 0.1))
+    blend_mu  = max(0.1, min(blend_mu  * XG_SCALE, MAX_GOALS - 0.1))
 
     # Final scoreline grid from blended xG
     final_grid = _scoreline_grid(blend_lam, blend_mu)
