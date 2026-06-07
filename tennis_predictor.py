@@ -10,8 +10,15 @@ import streamlit as st
 import numpy as np
 from typing import Dict, Optional, Tuple
 
-# Пътища — Streamlit Cloud търси в root на repo-то
-MODEL_DIR   = os.path.join(os.path.dirname(__file__), "models")
+# Файловете са качени в root на repo-то
+# Търсим първо в models/ папка, после в root
+def _find_dir():
+    base = os.path.dirname(os.path.abspath(__file__))
+    models_dir = os.path.join(base, "models")
+    if os.path.exists(os.path.join(models_dir, "feature_list.json")):
+        return models_dir
+    return base  # файловете са в root
+MODEL_DIR    = _find_dir()
 FEATURE_FILE = os.path.join(MODEL_DIR, "feature_list.json")
 
 # Mapping тур → файл
