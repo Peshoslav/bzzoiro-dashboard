@@ -92,6 +92,18 @@ div[data-testid="stSelectbox"]>div,div[data-testid="stDateInput"]>div{
 label{color:#9ca3af!important;font-size:.8rem!important}
 ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0d1117}
 ::-webkit-scrollbar-thumb{background:#1e2737;border-radius:3px}
+
+/* ── Sport Navigation ─────────────────────────────────────── */
+.sport-nav{display:flex;gap:6px;margin-bottom:1.2rem;
+  border-bottom:2px solid #1e2737;padding-bottom:0}
+.sport-btn{background:transparent;border:none;color:#6b7280;
+  font-family:'Inter',sans-serif;font-size:.95rem;font-weight:700;
+  padding:.6rem 1.4rem;cursor:pointer;border-bottom:3px solid transparent;
+  margin-bottom:-2px;transition:all .15s;border-radius:0;letter-spacing:.3px}
+.sport-btn:hover{color:#e2e8f0;background:rgba(255,255,255,.04);border-radius:8px 8px 0 0}
+.sport-btn.active{color:#00d4aa;border-bottom:3px solid #00d4aa}
+.sport-btn .sport-icon{font-size:1.1rem;margin-right:.4rem}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -968,10 +980,38 @@ try:
 except Exception:
     pass
 
+# ── Sport section state ──────────────────────────────────────────
+if "sport_section" not in st.session_state:
+    st.session_state["sport_section"] = "football"
+
 st.markdown(f"""<div class="topbar">
   <div class="logo">🏆 AI Sports <span>Analytics</span></div>
   <div style="font-size:.8rem;color:#6b7280">{ws_mgr.status} &nbsp;|&nbsp; 🕐 BG (UTC+3)</div>
 </div>""", unsafe_allow_html=True)
+
+# ── Sport navigation buttons ──────────────────────────────────────
+col_nav1, col_nav2, col_nav3 = st.columns([1, 1, 8])
+with col_nav1:
+    if st.button(
+        "⚽ Футбол",
+        key="nav_football",
+        type="primary" if st.session_state["sport_section"] == "football" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["sport_section"] = "football"
+        st.rerun()
+with col_nav2:
+    if st.button(
+        "🎾 Тенис",
+        key="nav_tennis",
+        type="primary" if st.session_state["sport_section"] == "tennis" else "secondary",
+        use_container_width=True,
+    ):
+        st.session_state["sport_section"] = "tennis"
+        st.rerun()
+
+st.markdown("---", unsafe_allow_html=False)
+_sport = st.session_state["sport_section"]
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -1109,8 +1149,14 @@ def _run_predictions_background(force: bool = False):
 
 _run_predictions_background()
 
-tab_schedule, tab_live, tab_results, tab_tennis = st.tabs(
-    ["📅 Програма", "🔴 На Живо", "📊 Резултати от прогнози", "🎾 Тенис"])
+# ── Показваме само табовете на активния спорт ─────────────────────
+if _sport == "tennis":
+    render_tennis_tab()
+    st.stop()
+
+# ── Футбол табове (само ако _sport == "football") ─────────────────
+tab_schedule, tab_live, tab_results = st.tabs(
+    ["📅 Програма", "🔴 На Живо", "📊 Резултати от прогнози"])
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -2051,10 +2097,3 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
             # Show answer immediately without rerun (rerun would blank the tab)
             st.markdown(f'<div class="ai-a"><div class="ai-role">🤖 AI</div>'
                         f'{r_answer}</div>', unsafe_allow_html=True)
-
-
-# ═════════════════════════════════════════════════════════════════
-# TAB 4 — ТЕНИС
-# ═════════════════════════════════════════════════════════════════
-with tab_tennis:
-    render_tennis_tab()
