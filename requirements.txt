@@ -3,3 +3,5 @@ pandas
 requests
 websocket-client
 google-genai
+lightgbm
+scipy
