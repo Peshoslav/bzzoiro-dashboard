@@ -3,12 +3,13 @@
 Tabs: 1. Програма  2. На Живо
 """
 import streamlit as st
-st.set_page_config(page_title="AI Football Analytics", page_icon="⚽",
+st.set_page_config(page_title="AI Sports Analytics", page_icon="🏆",
                    layout="wide", initial_sidebar_state="collapsed")
 
 from datetime import date, timedelta, datetime
 from typing import Dict, List, Any, Optional
 from collections import defaultdict
+from tennis_tab import render_tennis_tab
 
 # ── Gemini ────────────────────────────────────────────────────────
 try:
@@ -968,7 +969,7 @@ except Exception:
     pass
 
 st.markdown(f"""<div class="topbar">
-  <div class="logo">⚽ AI Football <span>Analytics</span></div>
+  <div class="logo">🏆 AI Sports <span>Analytics</span></div>
   <div style="font-size:.8rem;color:#6b7280">{ws_mgr.status} &nbsp;|&nbsp; 🕐 BG (UTC+3)</div>
 </div>""", unsafe_allow_html=True)
 
@@ -1108,8 +1109,8 @@ def _run_predictions_background(force: bool = False):
 
 _run_predictions_background()
 
-tab_schedule, tab_live, tab_results = st.tabs(
-    ["📅 Програма", "🔴 На Живо", "📊 Резултати от прогнози"])
+tab_schedule, tab_live, tab_results, tab_tennis = st.tabs(
+    ["📅 Програма", "🔴 На Живо", "📊 Резултати от прогнози", "🎾 Тенис"])
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -2050,3 +2051,10 @@ GIST_ID      = "abc123def456"       # ID от URL-а на Gist''')
             # Show answer immediately without rerun (rerun would blank the tab)
             st.markdown(f'<div class="ai-a"><div class="ai-role">🤖 AI</div>'
                         f'{r_answer}</div>', unsafe_allow_html=True)
+
+
+# ═════════════════════════════════════════════════════════════════
+# TAB 4 — ТЕНИС
+# ═════════════════════════════════════════════════════════════════
+with tab_tennis:
+    render_tennis_tab()
