@@ -297,7 +297,7 @@ ML МОДЕЛ ПРОГНОЗА:
     try:
         from google.genai import types
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-3.1-flash-lite",
             contents=[types.Content(
                 role="user",
                 parts=[types.Part(text=ctx)]
@@ -309,6 +309,15 @@ ML МОДЕЛ ПРОГНОЗА:
         )
         return response.text or "Няма отговор."
     except Exception as e:
+        err = str(e)
+        if "429" in err or "RESOURCE_EXHAUSTED" in err:
+            import re
+            retry = re.search(r"retry[^0-9]*([0-9]+)s", err)
+            wait  = retry.group(1) if retry else "60"
+            return (f"⏳ Gemini rate limit — изчакай {wait} секунди и опитай отново.\n"
+                    f"Ако проблемът продължава, провери квотата на: https://ai.dev/rate-limit")
+        if "API_KEY" in err or "api_key" in err.lower():
+            return "🔑 Невалиден Gemini API ключ. Провери GEMINI_API_KEY в Streamlit secrets."
         return f"Gemini грешка: {e}"
 
 
