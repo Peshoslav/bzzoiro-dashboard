@@ -706,3 +706,128 @@ def render_tennis_tab():
         st.warning("Gemini не е конфигуриран. Добави GEMINI_API_KEY в Streamlit secrets.")
     else:
         st.caption("Натисни бутона за Gemini анализ.")
+
+    # ── GEMINI ЧАТ ────────────────────────────────────────────────
+    st.markdown('''<div style="font-size:.7rem;font-weight:700;color:#4b5563;
+      text-transform:uppercase;letter-spacing:1.5px;margin:1.4rem 0 .6rem;
+      border-bottom:1px solid #1e2737;padding-bottom:.4rem">
+      💬 Разговор с Gemini</div>''', unsafe_allow_html=True)
+
+    # Инициализираме история на чата — отделна за всяка двойка играчи
+    chat_key = f"tennis_chat_{p1_name}_{p2_name}"
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = []
+
+    # Показваме историята
+    for msg in st.session_state[chat_key]:
+        role_icon = "✨" if msg["role"] == "assistant" else "👤"
+        bg = "#0d1117" if msg["role"] == "assistant" else "#1a2035"
+        border = "#00d4aa33" if msg["role"] == "assistant" else "#1e2737"
+        st.markdown(
+            f'''<div style="background:{bg};border:1px solid {border};
+              border-radius:10px;padding:.75rem 1rem;margin-bottom:.4rem;
+              font-size:.87rem;color:#e2e8f0;line-height:1.7;white-space:pre-wrap">
+              <span style="font-size:.65rem;color:#4b5563;display:block;margin-bottom:.3rem">
+              {role_icon} {"Gemini" if msg["role"]=="assistant" else "Ти"}</span>
+              {msg["content"]}
+            </div>''',
+            unsafe_allow_html=True
+        )
+
+    # Контекст за Gemini чат — включва всичко за мача
+    def _build_chat_system(p1, p2, surface, p1_prob, p2_prob,
+                           exp_games, p1_stats, p2_stats,
+                           p1_odds, p2_odds, ou_line):
+        return f"""Ти си експертен тенис анализатор асистент. Помагаш на потребителя да анализира мача:
+
+МАЧ: {p1} vs {p2} на {surface}
+ML ПРОГНОЗА: {p1} {p1_prob*100:.1f}% | {p2} {p2_prob*100:.1f}%
+ОЧАКВАНИ ГЕЙМОВЕ: {exp_games:.1f}
+КОЕФИЦИЕНТИ: {p1} @ {p1_odds} | {p2} @ {p2_odds} | О/У {ou_line}
+
+СТАТИСТИКИ {p1}: win%={p1_stats.get('long_win',0) or 0:.1%}, \
+spw={p1_stats.get('long_spw',0) or 0:.1%}, rpw={p1_stats.get('long_rpw',0) or 0:.1%}, \
+форма={p1_stats.get('form',[])}
+
+СТАТИСТИКИ {p2}: win%={p2_stats.get('long_win',0) or 0:.1%}, \
+spw={p2_stats.get('long_spw',0) or 0:.1%}, rpw={p2_stats.get('long_rpw',0) or 0:.1%}, \
+форма={p2_stats.get('form',[])}
+
+Отговаряй на БЪЛГАРСКИ. Бъди кратък, конкретен и аналитичен.
+Когато даваш препоръки за залагания, винаги споменавай рисковете."""
+
+    # Поле за въвеждане
+    user_input = st.chat_input(
+        placeholder=f"Питай Gemini за {p1_name} vs {p2_name}…",
+        key=f"tennis_chat_input_{p1_name}_{p2_name}"
+    )
+
+    if user_input and _client:
+        # Добавяме съобщението на потребителя
+        st.session_state[chat_key].append({
+            "role": "user", "content": user_input
+        })
+
+        # Изграждаме history за Gemini
+        history_for_gemini = []
+        for msg in st.session_state[chat_key][:-1]:  # всичко без последното
+            history_for_gemini.append(msg)
+
+        with st.spinner("Gemini мисли…"):
+            try:
+                from google.genai import types
+
+                # Изграждаме contents с история
+                contents = []
+                for msg in history_for_gemini[-8:]:  # последните 8 съобщения
+                    role = "user" if msg["role"] == "user" else "model"
+                    contents.append(types.Content(
+                        role=role,
+                        parts=[types.Part(text=msg["content"])]
+                    ))
+                # Добавяме текущото съобщение
+                contents.append(types.Content(
+                    role="user",
+                    parts=[types.Part(text=user_input)]
+                ))
+
+                system = _build_chat_system(
+                    p1_name, p2_name, surface,
+                    p1_prob, p2_prob, exp_games,
+                    stats_p1, stats_p2,
+                    p1_odds, p2_odds, ou_line
+                )
+
+                response = _client.models.generate_content(
+                    model="gemini-3.1-flash-lite",
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                        max_output_tokens=500,
+                    )
+                )
+                answer = response.text or "Няма отговор."
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    import re
+                    retry = re.search(r"retry[^0-9]*([0-9]+)s", err)
+                    wait  = retry.group(1) if retry else "60"
+                    answer = (f"⏳ Rate limit — изчакай {wait} секунди и опитай отново.")
+                else:
+                    answer = f"Gemini грешка: {e}"
+
+        st.session_state[chat_key].append({
+            "role": "assistant", "content": answer
+        })
+        st.rerun()
+
+    elif user_input and _client is None:
+        st.warning("Gemini не е конфигуриран.")
+
+    # Бутон за изчистване на историята
+    if st.session_state[chat_key]:
+        if st.button("🗑️ Изчисти чата", key=f"clear_chat_{p1_name}_{p2_name}",
+                     type="secondary"):
+            st.session_state[chat_key] = []
+            st.rerun()
